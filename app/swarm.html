@@ -190,6 +190,7 @@
 </main>
 <footer>
   <button id="playBtn" title="[space] replay history">▶ REPLAY</button>
+  <button id="speedBtn" title="[+/-] replay speed">0.5×</button>
   <input id="scrub" type="range" min="0" max="1000" value="1000">
   <div id="clock">—</div>
   <div class="legend">
@@ -227,6 +228,8 @@ function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt
 const SCOPES=[['all','ALL ARTIFACTS'],['agentic','AGENTIC ONLY'],['marker','MARKER ONLY']];
 let DATA=null, SIMDATA=null, SIM=false, SCOPEI=0;
 let T=0, playing=false, dragStrip=false, sel=null;
+const SPEEDS=[0.1,0.25,0.5,1,2,4]; let speedI=2, lastTs=0;
+const REPLAY_SECONDS=75;  // wall-clock seconds to replay the whole history at 1×
 let hover=null, mouse={x:-1,y:-1,px:0,py:0};
 let hits=[], AGG=null, pings=[], G=null;
 let lastRailAt=0, lastFeedKey='', lastLiveT=0, hintGone=false;
@@ -621,6 +624,7 @@ function attrColor(a){
 
 function draw(ts){
   const {W,H}=sizeCanvas(),tsec=ts/1000;
+  const dt=lastTs?Math.min(120,ts-lastTs):16; lastTs=ts;
   const cfd={x:0,y:H-132,w:W,h:132};
   const lane={x:0,y:cfd.y-26,w:W,h:26};
   const zone={x:0,y:0,w:W,h:lane.y};zone.cx=W*0.5;zone.cy=zone.h*0.52;
@@ -633,7 +637,9 @@ function draw(ts){
 
   const d=cur();hits=[];
   if(d&&AGG){
-    if(playing){T+=(d.t1-d.t0)/1400;if(T>=d.t1){T=d.t1;setPlaying(false)}
+    if(playing){
+      T+=(d.t1-d.t0)*(dt/1000)/REPLAY_SECONDS*SPEEDS[speedI];
+      if(T>=d.t1){T=d.t1;setPlaying(false)}
       $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));}
     T=Math.min(d.t1,Math.max(d.t0,T));
     $('#clock').textContent=(T>=d.t1-1500?'NOW · ':'')+fmtDate(T);
@@ -796,6 +802,8 @@ function setSim(v){
   refresh();
 }
 function dismissHint(){if(!hintGone){hintGone=true;const h=$('#hint');h.style.opacity='0';setTimeout(()=>h.remove(),1300)}}
+function setSpeed(i){speedI=Math.max(0,Math.min(SPEEDS.length-1,i));$('#speedBtn').textContent=SPEEDS[speedI]+'×'}
+$('#speedBtn').onclick=()=>setSpeed(speedI+1<SPEEDS.length?speedI+1:0);
 $('#modeBtn').onclick=()=>{setSim(!SIM)};
 $('#scopeBtn').onclick=()=>{SCOPEI=(SCOPEI+1)%SCOPES.length;$('#scopeBtn').textContent=SCOPES[SCOPEI][1];lastFeedKey='';refresh()};
 $('#playBtn').onclick=()=>{
@@ -832,6 +840,8 @@ document.addEventListener('keydown',e=>{
   if(e.code==='Space'){e.preventDefault();$('#playBtn').click()}
   else if(e.key==='l')$('#modeBtn').click();
   else if(e.key==='s')$('#scopeBtn').click();
+  else if(e.key==='+'||e.key==='=')setSpeed(speedI+1);
+  else if(e.key==='-'||e.key==='_')setSpeed(speedI-1);
   else if(e.key==='Escape'&&sel){sel=null;renderRail()}
   else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     const d=cur();if(!d)return;setPlaying(false);
