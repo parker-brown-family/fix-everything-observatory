@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # Full history: bin/verify greps every commit message for attribution
+        # trailers, and a shallow clone has one commit's worth of history.
+        with:
+          fetch-depth: 0
+
+      # `qmlformat -n` is the only QML check a machine without the Omarchy
+      # shell can perform: it parses without resolving imports, so it never
+      # sees `qs.Commons` and never needs to. The full `omarchy plugin
+      # validate` runs on an Omarchy box, and bin/verify says plainly which
+      # checks it skipped rather than implying all passed.
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq qt6-declarative-dev-tools shellcheck imagemagick
+
+      - name: verify
+        run: ./bin/verify

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Is the marketplace serving the plugin we actually released?
+#
+#   bin/check-listing
+#
+# The marketplace pins a listing to an EXACT COMMIT and serves that snapshot —
+# its preview, its description, its version — until somebody asks for a new
+# one. Nothing tells you it has gone stale. The repo can be perfect and the
+# page people actually see can be two releases behind: that happened to
+# omarchy-td-palette, whose listing served a v0.2.0 preview for the whole of
+# v0.3.0 because everything that checked anything was pointed at the
+# repository, and the listing is a different artifact.
+#
+# THE RULE: the listed commit must be at or ahead of the latest RELEASE TAG.
+# Lagging behind unreleased commits on main is fine and expected — a listing
+# is not supposed to track every push. Lagging behind a release is the bug.
+#
+# Needs network. Not a CI gate for that reason, and because a listing
+# legitimately takes a day or two to catch up after a release; run it when you
+# cut one.
+set -uo pipefail
+
+REGISTRY_REPO="omacom/omarchy-plugin-marketplace"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root" || exit 1
+
+for c in gh jq git; do
+  command -v "$c" >/dev/null || { echo "needs $c" >&2; exit 1; }
+done
+
+repo_url="$(git remote get-url origin 2>/dev/null \
+  | sed -e 's|git@github[^:]*:|https://github.com/|' -e 's|\.git$||')"
+[[ -n $repo_url ]] || { echo "no origin remote" >&2; exit 1; }
+
+reg="$(mktemp)"
+trap 'rm -f "$reg"' EXIT
+if ! gh api "repos/$REGISTRY_REPO/contents/registry.json" \
+     -H "Accept: application/vnd.github.raw" >"$reg" 2>/dev/null; then
+  echo "could not reach the marketplace registry — skipping" >&2
+  exit 0
+fi
+
+listed="$(jq -r --arg r "$repo_url" \
+  '.sources[]? | select(.repo == $r) | .listingValidatedCommit // empty' "$reg" | head -1)"
+
+if [[ -z $listed ]]; then
+  printf '  \033[90m–\033[0m not listed on the marketplace yet — nothing to compare\n'
+  exit 0
+fi
+
+git fetch -q --tags origin 2>/dev/null || true
+tag="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+[[ -n $tag ]] || { printf '  \033[90m–\033[0m no release tag yet\n'; exit 0; }
+tag_sha="$(git rev-list -n1 "$tag" 2>/dev/null)"
+
+printf '  listed snapshot   %s\n' "${listed:0:12}"
+printf '  latest release    %s (%s)\n' "${tag_sha:0:12}" "$tag"
+
+if [[ $listed == "$tag_sha" ]]; then
+  printf '  \033[32m✓\033[0m the listing serves the release\n'
+  exit 0
+fi
+if git merge-base --is-ancestor "$tag_sha" "$listed" 2>/dev/null; then
+  printf '  \033[32m✓\033[0m the listing is ahead of the release — fine\n'
+  exit 0
+fi
+printf '  \033[31m✗\033[0m the listing lags the release — ask the marketplace to revalidate\n'
+printf '    (comment on your submission issue, or open a refresh request on %s)\n' "$REGISTRY_REPO"
+exit 1

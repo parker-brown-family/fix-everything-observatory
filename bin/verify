@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# The gate. Everything that can be checked without a running Omarchy, plus
+# everything that can't — skipped with a reason rather than silently.
+#
+#   bin/verify
+#
+# Exit 0 only when there are no errors AND no warnings. This runs in CI on a
+# bare Ubuntu runner, which is why the split matters: a runner has Qt's QML
+# tooling but no Omarchy shell, so `omarchy plugin validate` does not exist
+# there. What a runner CAN do is parse the QML, read the manifest, compile the
+# Python, and enforce the house rules — and those are what actually regress.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NAMESPACE="brownfamilysports"
+
+errors=0 warns=0
+err()  { printf '  \033[31m✗\033[0m %s\n' "$*"; errors=$((errors + 1)); }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*"; warns=$((warns + 1)); }
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+skip() { printf '  \033[90m–\033[0m %s\n' "$*"; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Qt ships its QML tools outside PATH on some distros, so look in both places
+# rather than declaring the check unavailable when it is merely elsewhere.
+qt_tool() {
+  local t="$1" p
+  for p in "$(command -v "$t" 2>/dev/null)" "/usr/lib/qt6/bin/$t" "/usr/lib/qt6/$t"; do
+    [[ -n $p && -x $p ]] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
+have jq || { echo "jq is required" >&2; exit 1; }
+
+mf="$root/manifest.json"
+
+printf '\n\033[1mmanifest\033[0m\n'
+
+if ! jq empty "$mf" 2>/dev/null; then
+  err "manifest.json is not valid JSON"
+  exit 1
+fi
+ok "parses"
+
+for field in schemaVersion id name version author license description kinds entryPoints; do
+  [[ "$(jq -r ".$field // empty" "$mf")" ]] || err "manifest is missing .$field"
+done
+ok "required fields present"
+
+id="$(jq -r .id "$mf")"
+[[ $id == "$NAMESPACE."* ]] || err "id '$id' is outside the $NAMESPACE namespace"
+
+entry="$(jq -r '.entryPoints.barWidget // empty' "$mf")"
+[[ -n $entry && -f "$root/$entry" ]] && ok "entry point $entry exists" \
+  || err "entryPoints.barWidget missing or names an absent file"
+
+[[ "$(jq -r .license "$mf")" == "MIT" && -f "$root/LICENSE" ]] \
+  && ok "license: MIT declared and LICENSE file present" \
+  || err "manifest .license and the LICENSE file must both say MIT"
+
+printf '\n\033[1mqml\033[0m\n'
+
+# `qmlformat -n` parses without resolving imports, which is the only QML check
+# a machine without the Omarchy shell can actually perform — and it does catch
+# a real syntax break, which is what it is here for.
+if fmt="$(qt_tool qmlformat)"; then
+  bad=0
+  while IFS= read -r f; do
+    "$fmt" -n "$f" >/dev/null 2>&1 || { err "qmlformat cannot parse ${f#"$root/"}"; bad=1; }
+  done < <(find "$root" -name '*.qml' -not -path '*/.git/*')
+  [[ $bad -eq 0 ]] && ok "every .qml parses"
+else
+  warn "qmlformat not found — QML syntax unchecked"
+fi
+
+# The real validation needs the real validator; only an Omarchy box has it.
+if have omarchy; then
+  if omarchy plugin validate "$root" >/dev/null 2>&1; then
+    ok "omarchy plugin validate passes"
+  else
+    err "omarchy plugin validate rejects this folder"
+  fi
+else
+  skip "omarchy not installed — official validate runs on an Omarchy box"
+fi
+
+printf '\n\033[1mpython\033[0m\n'
+
+if have python3; then
+  if python3 -m py_compile "$root/observatory.py" 2>/dev/null; then
+    ok "observatory.py compiles"
+  else
+    err "observatory.py does not compile"
+  fi
+else
+  warn "python3 not found — observatory.py unchecked"
+fi
+
+printf '\n\033[1mshell\033[0m\n'
+
+shell_scripts=("$root/bin/fix-everything-observatory" "$root/bin/render-icons.sh"
+               "$root/bin/verify" "$root/bin/check-listing")
+bad=0
+for f in "${shell_scripts[@]}"; do
+  [[ -f $f ]] || continue
+  bash -n "$f" 2>/dev/null || { err "bash -n fails on ${f#"$root/"}"; bad=1; }
+done
+[[ $bad -eq 0 ]] && ok "every shell script parses"
+# A version-manager shim with no version pinned answers `command -v` and then
+# fails on every real invocation; probe with --version so that state reads as
+# "not installed" instead of as findings.
+if shellcheck --version >/dev/null 2>&1; then
+  if shellcheck -S warning "${shell_scripts[@]}" >/dev/null 2>&1; then
+    ok "shellcheck clean"
+  else
+    err "shellcheck has findings (run: shellcheck -S warning bin/*)"
+  fi
+else
+  skip "shellcheck not installed"
+fi
+
+printf '\n\033[1mlisting hygiene\033[0m\n'
+
+# The submission checklist requires installation AND removal instructions.
+grep -q "omarchy plugin add" "$root/README.md" \
+  && ok "README carries the install command" \
+  || err "README lacks the 'omarchy plugin add' install command"
+grep -q "omarchy plugin remove" "$root/README.md" \
+  && ok "README carries the removal command" \
+  || err "README lacks the 'omarchy plugin remove' removal command"
+
+if [[ -f "$root/preview.png" ]]; then
+  if have identify; then
+    w="$(identify -format '%w' "$root/preview.png" 2>/dev/null || echo 0)"
+    [[ $w -ge 1200 ]] && ok "preview.png present (${w}px wide)" \
+      || err "preview.png is only ${w}px wide — the card upscales it into a blur"
+  else
+    ok "preview.png present (width unchecked — no imagemagick)"
+  fi
+else
+  err "preview.png missing — the listing card falls back to nothing"
+fi
+
+if [[ -f "$root/seed/manifest.js.gz" ]]; then
+  if gunzip -t "$root/seed/manifest.js.gz" 2>/dev/null; then
+    ok "seed gzip is intact"
+  else
+    err "seed/manifest.js.gz is corrupt"
+  fi
+  sz="$(wc -c < "$root/seed/manifest.js.gz")"
+  [[ $sz -le 3000000 ]] || warn "seed is $((sz / 1000000))MB — heavier than a clone should carry"
+fi
+
+# House rule, machine-absolute: no AI is ever credited in this history.
+if git -C "$root" log --format=%B 2>/dev/null \
+   | grep -qiE 'co-authored-by:.*(claude|copilot|codex|gemini|aider)|generated with \[?claude'; then
+  err "an AI-attribution trailer is in the commit history — scrub it"
+else
+  ok "no AI-attribution trailers in history"
+fi
+
+printf '\n'
+if [[ $errors -eq 0 && $warns -eq 0 ]]; then
+  printf '\033[32mgate: clean\033[0m\n'
+  exit 0
+fi
+printf '\033[31mgate: %d error(s), %d warning(s)\033[0m\n' "$errors" "$warns"
+exit 1
