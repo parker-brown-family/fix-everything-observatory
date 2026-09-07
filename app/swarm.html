@@ -187,7 +187,7 @@
 <body>
 <header>
   <img class="logo" src="omarchy-mark-256.png" alt="omarchy">
-  <h1>WE CAN FIX EVERYTHING<small>THE REPAIR SWARM · FIX-EVERYTHING TRACKER</small></h1>
+  <h1>WE CAN FIX EVERYTHING<small>THE REPAIR SWARM · FIX-EVERYTHING OBSERVATORY</small></h1>
   <div class="diff"><span class="ctx">watching <span id="repoName">omacom/omarchy</span> repair itself</span>
 <del>every missing app, every incompatibility, every paper cut</del>
 <ins>one click · one disposable agent · one merged fix</ins></div>
@@ -229,6 +229,7 @@
 'use strict';
 /* ================= utils ================= */
 const $=s=>document.querySelector(s);
+const LOCAL_API=/^(127\.0\.0\.1|localhost)$/.test(location.hostname);
 const cv=$('#world'), cx=cv.getContext('2d');
 const CSS=getComputedStyle(document.documentElement);
 const C=n=>CSS.getPropertyValue('--'+n).trim();
@@ -475,7 +476,7 @@ function syncOverlay(){
   let html=null;
   if(!d){
     html=`<b style="color:var(--yellow)">no manifest yet</b><br>
-    the miner hasn't run — <code>fix-everything-tracker mine</code> builds
+    the miner hasn't run — <code>fix-everything-observatory mine</code> builds
     <code>data/manifest.js</code> from GitHub. Or watch a synthetic healing arc.
     <div class="obtns"><button id="obSim">SIMULATE HISTORY</button></div>`;
   } else {
@@ -623,8 +624,21 @@ function renderInspector(){
   <h3>THE STORY${SIM?' · SIMULATED':''}</h3>
   <div class="story">${story.map(e=>`<div class="ev ${e.cls}"><span class="t">+${fmtDur(e.t-a.opened)}</span>${e.html}</div>`).join('')}</div>
   ${fogNote}
+  ${LOCAL_API&&!SIM&&!a.closed?`<button id="allocBtn" style="margin-top:12px;width:100%;padding:9px 0;color:var(--violet);border-color:var(--violet);letter-spacing:.16em;font-weight:700" title="one click · one disposable agent — opens a terminal running claude primed on this ticket">⚡ ALLOCATE AGENT</button>`:''}
   ${a.url?`<div style="margin-top:10px"><a class="ghlink" href="${esc(a.url)}" target="_blank">open on GitHub ↗</a></div>`:''}`;
   $('#inspclose').onclick=()=>{sel=null;renderRail()};
+  const ab=$('#allocBtn');
+  if(ab)ab.onclick=async()=>{
+    ab.disabled=true;ab.textContent='ALLOCATING…';
+    try{
+      const r=await fetch('/api/allocate',{method:'POST',
+        headers:{'Content-Type':'application/json','X-Fix-Observatory':'1'},
+        body:JSON.stringify({number:a.number})});
+      const j=await r.json();
+      ab.textContent=j.ok?'⚡ AGENT SPAWNED — check your terminal':'✕ '+(j.error||'allocation failed');
+      if(!j.ok)ab.disabled=false;
+    }catch(_){ab.textContent='✕ observatory server not reachable';ab.disabled=false}
+  };
 }
 
 /* ================= feed ================= */

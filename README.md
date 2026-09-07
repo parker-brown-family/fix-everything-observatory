@@ -1,4 +1,4 @@
-# fix-everything-tracker
+# fix-everything-observatory
 
 The instrument panel for [wecanfixeverything.com](https://wecanfixeverything.com/):
 a live, scrubbable visualizer of the Omarchy repair swarm. It watches the
@@ -33,6 +33,16 @@ Click the Omarchy chip in the bar tray → the swarm opens.
   an inspector: the whole chronological story — opened → labelled → commented →
   closed → reopened → merged — joined from the issues, comments, and events
   feeds, with real comment snippets and a GitHub link.
+- **Allocate an agent** — on an open ticket the inspector shows a one-click
+  `⚡ ALLOCATE AGENT` button, the omarchy error-notification pattern pointed at a
+  repair: it opens a terminal running `claude` primed with the ticket's title,
+  author, provenance, and latest comments, and a standing brief to orient, form a
+  diagnosis, and suggest next steps (never posting to GitHub unasked). The button
+  exists only on a local instance — the page POSTs to the local server, which
+  spawns the agent; a hosted copy of the page has no server behind it and never
+  renders it. The endpoint requires a custom header, so a random web page cannot
+  fire it cross-origin. Point it at your own agent with `FIX_OBSERVATORY_AGENT_CMD`
+  (a shell template carrying `{prompt_file}`).
 - **Replay** — the footer is a media-player transport. `space` plays and
   pauses, `⏮`/`⏭` (`Home`/`End`) jump to the beginning or to now, and the rate
   button (`<`/`>`) runs history at 0.25×–4× of the base pace of one minute for
@@ -76,34 +86,34 @@ never "human-confirmed".
 
 | Path | What |
 |---|---|
-| `tracker.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `data/manifest.{json,js}`, serves the app. Stdlib only. Skips a cycle below 8 API requests remaining. |
+| `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `data/manifest.{json,js}`, serves the app. Stdlib only. Skips a cycle below 8 API requests remaining. |
 | `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
-| `tray/fix-tracker-sni.py` | SNI StatusNotifierItem applet — the Omarchy chip in the quickshell bar tray; any click opens the swarm. Pure Gio, no appindicator. |
+| `tray/fix-observatory-sni.py` | SNI StatusNotifierItem applet — the Omarchy chip in the quickshell bar tray; any click opens the swarm. Pure Gio, no appindicator. |
 | `tray/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
-| `bin/fix-everything-tracker` | Entrypoint: `open · mine · serve · tray · status · install`. |
+| `bin/fix-everything-observatory` | Entrypoint: `open · mine · serve · tray · status · install`. |
 | `contract/omarchy-fix-event-v1.md` | The event-marker pattern that makes a ticket definitively attributable to the one-click fixer. |
 | `docs/` | Research notes, decision records (0001 IA, 0002 smell + stats), QA pass. |
 
 ## Run
 
 ```
-bin/fix-everything-tracker open      # ensure server, open the swarm
-bin/fix-everything-tracker install   # icons + desktop entry + start the tray
-bin/fix-everything-tracker status    # is it up? recent log
+bin/fix-everything-observatory open      # ensure server, open the swarm
+bin/fix-everything-observatory install   # icons + desktop entry + start the tray
+bin/fix-everything-observatory status    # is it up? recent log
 ```
 
 Pin the tray icon so it's always visible (not in the hover drawer): in
 `~/.config/omarchy/shell.json`, the `omarchy.tray` entry under `bar.layout.right`:
 
 ```
-{ "id": "omarchy.tray", "pinned": ["fix-everything-tracker"] }
+{ "id": "omarchy.tray", "pinned": ["fix-everything-observatory"] }
 ```
 
 Autostart on login (add to hyprland config by hand — config writes flash the
 CRT banner on this box):
 
 ```
-exec-once = /home/parker/Work/fix-everything-tracker/bin/fix-everything-tracker tray
+exec-once = /home/parker/Work/fix-everything-observatory/bin/fix-everything-observatory tray
 ```
 
 ## Coverage, and why a token decides what the numbers mean
@@ -134,10 +144,12 @@ text — twenty thousand snippets is ~7MB the browser would re-parse on every
 load. An older comment renders as “text not stored”, which is not the same
 claim as an empty comment.
 
-Env: `FIX_TRACKER_REPO` (default `omacom/omarchy`), `FIX_TRACKER_PORT` (4517),
-`FIX_TRACKER_INTERVAL` (900s with a token, 300s without), `FIX_TRACKER_MAX_PAGES`
-(safety cap on a walk), `FIX_TRACKER_SNIPPETS` (1500), `GITHUB_TOKEN` / `GH_TOKEN`
-(the difference between a slice and the repo).
+Env: `FIX_OBSERVATORY_REPO` (default `omacom/omarchy`), `FIX_OBSERVATORY_PORT` (4517),
+`FIX_OBSERVATORY_INTERVAL` (900s with a token, 300s without), `FIX_OBSERVATORY_MAX_PAGES`
+(safety cap on a walk), `FIX_OBSERVATORY_SNIPPETS` (1500), `FIX_OBSERVATORY_AGENT_CMD` (shell template
+for ALLOCATE AGENT, receives `{prompt_file}`; default opens `$TERMINAL`/alacritty
+running `claude`), `FIX_OBSERVATORY_AGENT_CWD` (default `$HOME`), `GITHUB_TOKEN` /
+`GH_TOKEN` (the difference between a slice and the repo).
 
 ## Toward wecanfixeverything.com
 

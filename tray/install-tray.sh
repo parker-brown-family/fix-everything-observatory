@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Fix-Everything Tracker launch surfaces:
+# Install the Fix-Everything Observatory launch surfaces:
 #  1. SNI tray icon (omarchy spiral) in the Omarchy quickshell bar — started now.
 #  2. Desktop entry so app launchers can start it.
 # Autostart on login is NOT wired automatically (hyprland config edits raise the
@@ -10,35 +10,35 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 1 — desktop entry
 APPS="$HOME/.local/share/applications"
 mkdir -p "$APPS"
-cat > "$APPS/fix-everything-tracker.desktop" <<EOF
+cat > "$APPS/fix-everything-observatory.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Fix-Everything Tracker
+Name=Fix-Everything Observatory
 Comment=Watch the Omarchy repair swarm heal the repo
-Exec=$ROOT/bin/fix-everything-tracker open
+Exec=$ROOT/bin/fix-everything-observatory open
 Icon=$ROOT/app/omarchy-logo.png
 Terminal=false
 Categories=Development;Monitor;
 EOF
-echo "desktop entry: $APPS/fix-everything-tracker.desktop"
+echo "desktop entry: $APPS/fix-everything-observatory.desktop"
 
 # 1b — hicolor theme icon (the SNI item's IconName resolves through this;
 # more reliable than the ARGB pixmap fallback across tray hosts)
 ICONDIR="$HOME/.local/share/icons/hicolor/128x128/apps"
 mkdir -p "$ICONDIR"
-cp "$ROOT/app/omarchy-logo.png" "$ICONDIR/fix-everything-tracker.png"
-echo "theme icon: $ICONDIR/fix-everything-tracker.png"
+cp "$ROOT/app/omarchy-logo.png" "$ICONDIR/fix-everything-observatory.png"
+echo "theme icon: $ICONDIR/fix-everything-observatory.png"
 # To keep the icon ALWAYS visible (not in the hover drawer), pin it in
 # ~/.config/omarchy/shell.json — bar.layout.right, the omarchy.tray entry:
-#   { "id": "omarchy.tray", "pinned": ["fix-everything-tracker"] }
+#   { "id": "omarchy.tray", "pinned": ["fix-everything-observatory"] }
 
 # 2 — tray applet, single instance, survives this shell
-if pgrep -f "tray/fix-tracker-sni.py" >/dev/null 2>&1; then
+if pgrep -f "tray/fix-observatory-sni.py" >/dev/null 2>&1; then
   echo "tray applet: already running"
 else
-  setsid -f python3 "$ROOT/tray/fix-tracker-sni.py" >>"$ROOT/data/tray.log" 2>&1
+  setsid -f python3 "$ROOT/tray/fix-observatory-sni.py" >>"$ROOT/data/tray.log" 2>&1
   sleep 0.7
-  if pgrep -f "tray/fix-tracker-sni.py" >/dev/null 2>&1; then
+  if pgrep -f "tray/fix-observatory-sni.py" >/dev/null 2>&1; then
     echo "tray applet: started (icon should be in the omarchy bar tray)"
   else
     echo "tray applet: FAILED — see $ROOT/data/tray.log" >&2
@@ -47,4 +47,4 @@ fi
 
 echo
 echo "to autostart on login, add to hyprland config yourself:"
-echo "exec-once = $ROOT/bin/fix-everything-tracker tray"
+echo "exec-once = $ROOT/bin/fix-everything-observatory tray"

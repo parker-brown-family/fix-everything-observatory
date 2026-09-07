@@ -21,5 +21,5 @@ magick "$ROOT/app/omarchy-mark-256.png" -resize 128x128 "$ROOT/app/omarchy-logo.
 
 ICONDIR="$HOME/.local/share/icons/hicolor/128x128/apps"
 mkdir -p "$ICONDIR"
-cp "$ROOT/app/omarchy-logo.png" "$ICONDIR/fix-everything-tracker.png"
+cp "$ROOT/app/omarchy-logo.png" "$ICONDIR/fix-everything-observatory.png"
 echo "rendered omarchy mark → app/omarchy-mark-256.png, app/omarchy-logo.png, $ICONDIR/"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fix-Everything Tracker — miner + server for the Omarchy repair-swarm visualizer.
+"""Fix-Everything Observatory — miner + server for the Omarchy repair-swarm visualizer.
 
 Mines omacom/omarchy issues/PRs, repo-wide comments, and repo-wide issue events;
 scores each artifact for agent smell; writes data/manifest.{json,js}; serves
@@ -22,6 +22,9 @@ import functools
 import json
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -33,8 +36,8 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 CACHE_PATH = DATA / "http-cache.json"
-REPO = os.environ.get("FIX_TRACKER_REPO", "omacom/omarchy")
-PORT = int(os.environ.get("FIX_TRACKER_PORT", "4517"))
+REPO = os.environ.get("FIX_OBSERVATORY_REPO", "omacom/omarchy")
+PORT = int(os.environ.get("FIX_OBSERVATORY_PORT", "4517"))
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 # Authenticated we get 5,000 requests an hour, which is enough to walk every
 # stream to its end (~600 pages for omarchy) — so we do, and order ascending
@@ -43,11 +46,11 @@ TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 # impossible; we take the NEWEST pages instead and record the truncation.
 COMPLETE = bool(TOKEN)
 ORDER = "asc" if COMPLETE else "desc"
-MAX_PAGES = int(os.environ.get("FIX_TRACKER_MAX_PAGES", "1500" if TOKEN else "3"))
+MAX_PAGES = int(os.environ.get("FIX_OBSERVATORY_MAX_PAGES", "1500" if TOKEN else "3"))
 # Every comment ships as a tick so the event lane is honest across the whole
 # span; only the newest carry their text, because 20k snippets is ~7MB the
 # browser would re-parse on every load.
-SNIPPET_KEEP = int(os.environ.get("FIX_TRACKER_SNIPPETS", "1500"))
+SNIPPET_KEEP = int(os.environ.get("FIX_OBSERVATORY_SNIPPETS", "1500"))
 # GitHub stops paginating /issues/events at 300 pages and simply withholds the
 # next link. Walking to "no next link" there reaches the CAP, not the end of the
 # stream, and the difference is measurable: omarchy's events then begin in
@@ -57,7 +60,13 @@ SNIPPET_KEEP = int(os.environ.get("FIX_TRACKER_SNIPPETS", "1500"))
 EVENT_PAGE_CAP = 300
 # An exhaustive cycle is ~600 conditional round trips. They cost nothing against
 # the rate limit (a 304 is free) but they cost wall clock, so it beats slower.
-INTERVAL = int(os.environ.get("FIX_TRACKER_INTERVAL", "900" if TOKEN else "300"))
+INTERVAL = int(os.environ.get("FIX_OBSERVATORY_INTERVAL", "900" if TOKEN else "300"))
+# One-click agent allocation, the omarchy error-notification pattern pointed at a
+# ticket: the page POSTs an issue number, the server writes a context-rich prompt
+# and opens a terminal running `claude` primed on it. Local instances only — the
+# server binds 127.0.0.1, and a hosted copy of the page never renders the button.
+AGENT_CMD = os.environ.get("FIX_OBSERVATORY_AGENT_CMD")   # shell template; {prompt_file}
+AGENT_CWD = os.environ.get("FIX_OBSERVATORY_AGENT_CWD", str(Path.home()))
 MIN_BUDGET = 8  # skip a cycle rather than spend the last requests
 
 MARKER_RE = re.compile(r"<!--\s*omarchy-fix-event:v(\d+)\s*(.*?)-->", re.S)
@@ -180,7 +189,7 @@ def api_page(path: str, row_fn=None):
     keeps a whole-repo cache in megabytes rather than hundreds of them.
     """
     headers = {
-        "User-Agent": "fix-everything-tracker/2.0 (+https://wecanfixeverything.com)",
+        "User-Agent": "fix-everything-observatory/2.0 (+https://wecanfixeverything.com)",
         "Accept": "application/vnd.github+json",
     }
     if TOKEN:
@@ -447,6 +456,81 @@ def mine_once() -> None:
         f"api_remaining={RATE.get('remaining', '?')} err={err}")
 
 
+# ---- agent allocation ----------------------------------------------------------
+def find_terminal():
+    for t in ([os.environ.get("TERMINAL")] if os.environ.get("TERMINAL") else []) + [
+            "alacritty", "ghostty", "kitty", "foot", "wezterm", "xterm"]:
+        if t and shutil.which(t):
+            return t
+    return None
+
+
+def agent_prompt(art, comments) -> str:
+    kind = art.get("kind") or "issue"
+    n = art.get("number")
+    gh_verb = "pr" if kind == "pr" else "issue"
+    recent = [c for c in comments if c.get("number") == n and c.get("snippet")][-3:]
+    lines = [
+        "You are a disposable repair agent, allocated with one click from the",
+        "Fix-Everything Observatory for this ticket:",
+        "",
+        f"  {REPO}#{n} — {art.get('title') or '(untitled)'}",
+        f"  {art.get('url') or ''}",
+        f"  {kind} · opened {art.get('opened_at')} by @{art.get('author')}"
+        f" · attribution: {art.get('attribution')}",
+    ]
+    if art.get("labels"):
+        lines.append("  labels: " + ", ".join(art["labels"]))
+    if recent:
+        lines += [""] + ["Recent comments:"] + [
+            f"  - @{c.get('author')}: \"{c.get('snippet')}\"" for c in recent]
+    lines += [
+        "",
+        "Your job, in order:",
+        f"1. Read the whole thread:  gh {gh_verb} view {n} --repo {REPO} --comments",
+        "2. Orient: find the code, config, or subsystem this points at, and state",
+        "   what the failure actually is in your own words.",
+        "3. If it can be reproduced safely on this machine, try; otherwise say",
+        "   exactly what a reproduction would need.",
+        "4. Deliver: a diagnosis hypothesis, the check that would confirm or refute",
+        "   it, and concrete suggested next steps (or a fix sketch).",
+        "",
+        "Do NOT post to GitHub or take any public action unless explicitly asked.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def allocate_agent(number: int):
+    try:
+        manifest = json.loads((DATA / "manifest.json").read_text())
+    except Exception as exc:
+        return f"manifest unreadable: {exc}"
+    art = next((a for a in manifest.get("artifacts", [])
+                if a.get("number") == number), None)
+    if art is None:
+        return f"#{number} is not in the manifest"
+    pf = DATA / f"agent-prompt-{number}.md"
+    pf.write_text(agent_prompt(art, manifest.get("comments") or []))
+    q = shlex.quote(str(pf))
+    if AGENT_CMD:
+        cmd = ["bash", "-lc", AGENT_CMD.format(prompt_file=q)]
+    else:
+        term = find_terminal()
+        if not term:
+            return "no terminal emulator found — set FIX_OBSERVATORY_AGENT_CMD"
+        cmd = [term, "-e", "bash", "-lc",
+               f'claude "$(cat {q})" || {{ echo; echo "[fix-everything-observatory]'
+               f' could not run claude"; read -r; }}']
+    try:
+        subprocess.Popen(cmd, cwd=AGENT_CWD, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        return f"spawn failed: {exc}"
+    log(f"allocated agent for #{number} ({cmd[0]})")
+    return None
+
+
 # ---- server -------------------------------------------------------------------
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):  # noqa: N802 — stdlib name
@@ -455,6 +539,29 @@ class QuietHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+    def do_POST(self):  # noqa: N802 — stdlib name
+        if self.path != "/api/allocate":
+            self.send_error(404)
+            return
+        # a custom header forces a CORS preflight, so a random web page cannot
+        # fire this cross-origin; same-origin is our own app
+        if self.headers.get("X-Fix-Observatory") != "1":
+            self.send_error(403, "missing X-Fix-Observatory header")
+            return
+        try:
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            number = int(json.loads(raw or b"{}").get("number"))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            self.send_error(400, "bad body")
+            return
+        err = allocate_agent(number)
+        body = json.dumps({"ok": err is None, "error": err}).encode()
+        self.send_response(200 if err is None else 409)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def serve() -> None:
@@ -473,7 +580,7 @@ def serve() -> None:
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", PORT), handler)
     except OSError as exc:
-        log(f"port {PORT} unavailable ({exc}) — assuming a tracker already serves")
+        log(f"port {PORT} unavailable ({exc}) — assuming an observatory already serves")
         return
     log(f"serving http://127.0.0.1:{PORT}/app/swarm.html (repo={REPO}, "
         f"poll={INTERVAL}s, "

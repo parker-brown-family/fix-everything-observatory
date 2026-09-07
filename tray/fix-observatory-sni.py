@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""StatusNotifierItem tray applet for the Fix-Everything Tracker.
+"""StatusNotifierItem tray applet for the Fix-Everything Observatory.
 
 Puts the Omarchy spiral in the Omarchy quickshell bar's SNI tray; any click
-opens the swarm visualizer via `bin/fix-everything-tracker open`.
+opens the swarm visualizer via `bin/fix-everything-observatory open`.
 
 Pure Gio/GLib DBus — no libappindicator dependency. Single-instance via a
 well-known bus name.
@@ -20,8 +20,8 @@ from gi.repository import Gio, GLib, GdkPixbuf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ICON = ROOT / "app" / "omarchy-logo.png"
-OPEN_CMD = [str(ROOT / "bin" / "fix-everything-tracker"), "open"]
-APP_NAME = "org.omarchy.FixEverythingTracker"
+OPEN_CMD = [str(ROOT / "bin" / "fix-everything-observatory"), "open"]
+APP_NAME = "org.omarchy.FixEverythingObservatory"
 SNI_PATH = "/StatusNotifierItem"
 
 SNI_XML = """
@@ -72,14 +72,14 @@ def icon_pixmap():
 PIXMAP = icon_pixmap()
 PROPS = {
     "Category": GLib.Variant("s", "ApplicationStatus"),
-    "Id": GLib.Variant("s", "fix-everything-tracker"),
-    "Title": GLib.Variant("s", "Fix-Everything Tracker"),
+    "Id": GLib.Variant("s", "fix-everything-observatory"),
+    "Title": GLib.Variant("s", "Fix-Everything Observatory"),
     "Status": GLib.Variant("s", "Active"),
-    "IconName": GLib.Variant("s", "fix-everything-tracker"),
+    "IconName": GLib.Variant("s", "fix-everything-observatory"),
     "IconThemePath": GLib.Variant("s", ""),
     "IconPixmap": GLib.Variant("a(iiay)", PIXMAP),
     "ToolTip": GLib.Variant("(sa(iiay)ss)",
-                            ("", PIXMAP, "Fix-Everything Tracker",
+                            ("", PIXMAP, "Fix-Everything Observatory",
                              "open the omarchy repair swarm")),
     "ItemIsMenu": GLib.Variant("b", False),
     "Menu": GLib.Variant("o", "/NO_DBUSMENU"),
