@@ -899,8 +899,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path.startswith("/data/"):
             name = path[len("/data/"):]
+            # An allowlist, not a directory. The page has exactly one data
+            # dependency, while the state directory also holds the HTTP cache,
+            # the logs, and the agent prompts and reports — which carry ticket
+            # context and a local filesystem's shape. Serving a whole directory
+            # because one file in it is wanted is how those end up readable by
+            # anything that can reach the port.
             target = DATA / name
-            if "/" in name or name.startswith(".") or not target.is_file():
+            if name not in ("manifest.js", "manifest.json") or not target.is_file():
                 self.send_error(404)
                 return
             blob = target.read_bytes()
