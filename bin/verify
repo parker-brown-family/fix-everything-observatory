@@ -75,6 +75,32 @@ else
   warn "qmlformat not found — QML syntax unchecked"
 fi
 
+# The bar slot comes from the ROOT's implicit size, and a root that does not set
+# one is a widget that loads, enables, registers its IPC handler, passes the
+# official validator, logs nothing — and draws nothing. That state is
+# indistinguishable from "not installed", which is exactly how it shipped once:
+# changing this file's root from BarWidget (which carried the pair) to Panel
+# (a bare Item, which does not) took both lines with it, and nothing anywhere
+# noticed until two sessions photographed the bar.
+#
+# This is a SHAPE check, not a render check — it cannot prove a chip appears,
+# only that the one line whose absence guarantees it does not is present. A
+# comment beside the code helps whoever is already reading it; this is for
+# whoever is not. Two-space indent means a direct child of the root, which is
+# the house formatting and what distinguishes it from the many nested
+# `column.implicitHeight` bindings inside a panel body.
+if [[ -n ${entry:-} && -f "$root/$entry" ]] \
+   && jq -e '.kinds | index("bar-widget")' "$mf" >/dev/null 2>&1; then
+  missing=()
+  grep -qE '^  implicitWidth:' "$root/$entry"  || missing+=(implicitWidth)
+  grep -qE '^  implicitHeight:' "$root/$entry" || missing+=(implicitHeight)
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    ok "the bar-widget root sizes its own slot"
+  else
+    err "${entry} declares no root ${missing[*]} — the bar slot would be zero-sized and the chip would not draw, silently. Add: implicitWidth: button.implicitWidth"
+  fi
+fi
+
 # The real validation needs the real validator; only an Omarchy box has it.
 if have omarchy; then
   if omarchy plugin validate "$root" >/dev/null 2>&1; then
