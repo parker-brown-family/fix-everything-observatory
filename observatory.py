@@ -219,6 +219,13 @@ def adopt_legacy_data() -> None:
     program, and a copy of it in the state directory would outlive the install
     that owns it and go on being served after an upgrade replaced it.
     """
+    # An explicit FIX_OBSERVATORY_STATE means "use this history", not "seed a
+    # new one from the tree". Without this an override pointed at an empty
+    # directory — the way a cold-start test is made honest — still gets the
+    # working tree's manifest imported into it, and the test passes for exactly
+    # the reason it was written to rule out.
+    if os.environ.get("FIX_OBSERVATORY_STATE"):
+        return
     # Guarded on the manifest, not on the directory: the launcher creates the
     # state directory before this ever runs, so "does it exist" is always true
     # and would skip every migration there is.
@@ -951,6 +958,13 @@ def serve() -> None:
     except OSError as exc:
         log(f"port {PORT} unavailable ({exc}) — assuming an observatory already serves")
         return
+    # Name the state directory on every start. Since the history moved out of
+    # the tree, an absent data/ no longer means an absent history: a "fresh
+    # install" test on a box that has ever run this reads the real one and
+    # passes for the wrong reason. Saying which history is being served is what
+    # makes that visible without anyone having to remember it.
+    log(f"state {DATA}"
+        f"{' (empty — the seed will be served until the first cycle lands)' if not (DATA / 'manifest.json').exists() else ''}")
     log(f"serving http://127.0.0.1:{PORT}/app/swarm.html (repo={REPO}, "
         f"poll={INTERVAL}s, "
         f"{'exhaustive' if COMPLETE else 'newest %d pages, unauthenticated' % MAX_PAGES})")
