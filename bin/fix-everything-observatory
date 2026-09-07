@@ -6,7 +6,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${FIX_OBSERVATORY_PORT:-4517}"
 URL="http://127.0.0.1:${PORT}/app/swarm.html"
-mkdir -p "$ROOT/data"
+# The mined history outlives the program. ROOT is the install and may be
+# read-only; state goes where XDG puts it, and observatory.py resolves the same
+# path from the same two variables so the two never disagree.
+STATE="${FIX_OBSERVATORY_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/fix-everything-observatory}"
+mkdir -p "$STATE"
 
 # The horizon is a token. Unauthenticated, GitHub allows 60 requests an hour —
 # three pages, two days of a repo with fifteen months of history. Authenticated
@@ -24,9 +28,9 @@ up() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null && { exec 3>&- 3<&-; r
 
 ensure_server() {
   if ! up; then
-    setsid -f python3 "$ROOT/observatory.py" --serve >>"$ROOT/data/observatory.log" 2>&1
+    setsid -f python3 "$ROOT/observatory.py" --serve >>"$STATE/observatory.log" 2>&1
     for _ in $(seq 1 25); do up && return 0; sleep 0.15; done
-    echo "server did not come up on :$PORT — see $ROOT/data/observatory.log" >&2
+    echo "server did not come up on :$PORT — see $STATE/observatory.log" >&2
     return 1
   fi
 }
@@ -45,8 +49,9 @@ case "${1:-open}" in
     exec python3 "$ROOT/observatory.py" --serve ;;
   status)
     if up; then echo "server: up · $URL"; else echo "server: down"; fi
-    if [ -f "$ROOT/data/manifest.json" ]; then
-      tail -c 2000 "$ROOT/data/observatory.log" 2>/dev/null | tail -n 3 || true
+    echo "state:  $STATE"
+    if [ -f "$STATE/manifest.json" ]; then
+      tail -c 2000 "$STATE/observatory.log" 2>/dev/null | tail -n 3 || true
     elif [ -f "$ROOT/seed/manifest.js.gz" ]; then
       n=$(grep -o '"artifacts": [0-9]*' "$ROOT/seed/manifest.meta.json" 2>/dev/null | grep -o '[0-9]*' || true)
       when=$(grep -o '"fetched_at": "[0-9-]*' "$ROOT/seed/manifest.meta.json" 2>/dev/null | tail -c 11 || true)

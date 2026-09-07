@@ -31,13 +31,22 @@ borrowed to raise the mining horizon (read-only calls to GitHub's public API) �
 and `claude`, only if you turn on agent allocation (below; off by default).
 
 What it touches: network to `api.github.com` only; the server binds
-`127.0.0.1`; everything it writes stays inside its own plugin directory
-(`data/`). No user configuration is modified.
+`127.0.0.1`; the mined history is written to
+`~/.local/state/fix-everything-observatory/` and nothing is ever written into
+the plugin's own directory. No user configuration is modified.
 
-Remove it the same way it came, mined data and all:
+Remove it the same way it came:
 
 ```
 omarchy plugin remove brownfamilysports.observatory
+```
+
+That leaves the mined history where it is, so a reinstall or an upgrade opens on
+everything the instrument had already seen instead of spending thirteen minutes
+earning it again. When you want that gone too:
+
+```
+rm -rf ~/.local/state/fix-everything-observatory
 ```
 
 If you also added the optional launcher entry (`bin/fix-everything-observatory
@@ -73,7 +82,8 @@ install`), delete `~/.local/share/applications/fix-everything-observatory.deskto
   hypothesis and the check that would refute it), a PR gets a review job (read the
   diff, assess the claim on its merits, verdict of merge / changes / decline),
   because telling a reviewer to "find the failure" invents one. It names a written
-  destination — `data/agent-report-<n>.md` — since a report left in a disposable
+  destination — `agent-report-<n>.md` in the state directory — since a report
+  left in a disposable
   terminal's scrollback is a report nobody read, says this box is a live Omarchy
   install (the honest repro surface, and the hazard), and never posts to GitHub
   unasked. Before spawning its own `claude` the server preflights it — no
@@ -144,7 +154,7 @@ allowed to be the same grey dot.
 
 | Path | What |
 |---|---|
-| `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `data/manifest.{json,js}`, serves the app. Stdlib only. Skips a cycle below 8 API requests remaining. |
+| `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `manifest.{json,js}` into the state directory (`$XDG_STATE_HOME`, or `FIX_OBSERVATORY_STATE` to override), serves it at the `/data/` URL the page asks for. Stdlib only. Skips a cycle below 8 API requests remaining. |
 | `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
 | `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. A click ensures the server and opens the swarm; the widget's one setting is the agent-allocation toggle. |
 | `bin/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |

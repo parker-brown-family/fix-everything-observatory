@@ -579,9 +579,10 @@ package() {
         <button class="texp" onclick="toggleTicket(this,event)" title="Expand details">&#x25B6;</button>
         <div class="tid">T-001</div>
         <div class="ttl">Split the install root from the state directory</div>
-        <span class="bdg bh">high</span>
+        <span class="bdg br">done</span>
       </div>
       <div class="trow-body">
+        <div class="tbfield"><div class="tblabel">Shipped</div>Landed on the <em>plugin</em> track, for its own sake rather than as packaging preparation: until now a reinstall or an upgrade took the mined history with it, which for an instrument whose whole value accumulates was a real loss. The mined history now lives under <code>$XDG_STATE_HOME</code>, the handler routes <code>/data/</code> explicitly, a one-time migration carries an existing in-tree history across without deleting it, and <code>--seed</code> refuses on a read-only copy instead of failing at the write. Verified against a genuinely read-only install with state elsewhere &#x2014; the shape a package produces, and one nothing had tested before.</div>
         <div class="tbfield"><div class="tblabel">Intent</div>Teach the program the difference between where it is installed and where it keeps what it mines, so it can live in a root-owned directory.</div>
         <div class="tbfield"><div class="tblabel">Touches</div><div class="tbfiles">observatory.py (ROOT, DATA, CACHE_PATH, SEED_DIR, the three mkdir sites, the two agent-file paths, the server's serve root)<br>bin/fix-everything-observatory</div></div>
         <div class="tbfield"><div class="tblabel">Acceptance</div><pre>Given the program installed read-only under /opt

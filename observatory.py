@@ -39,8 +39,28 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
+
+
+def _state_dir() -> Path:
+    """Where the mined history lives — deliberately not inside the install.
+
+    ROOT is the program: app/, seed/, and read-only the moment this is anything
+    but a git clone. What the miner writes has to outlive an upgrade and a
+    reinstall, so it goes where the XDG base-directory spec puts state a user
+    never chose but would miss. FIX_OBSERVATORY_STATE overrides it, which is
+    also how a second instance gets a history of its own.
+    """
+    override = os.environ.get("FIX_OBSERVATORY_STATE")
+    if override:
+        return Path(override).expanduser().resolve()
+    base = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
+    return Path(base).expanduser().resolve() / "fix-everything-observatory"
+
+
+DATA = _state_dir()
 CACHE_PATH = DATA / "http-cache.json"
+# Where it used to live, and still does for anyone upgrading in place.
+LEGACY_DATA = ROOT / "data"
 # A fresh clone has no manifest, and building one is ~590 conditional round trips
 # and thirteen minutes. Rather than show an empty instrument for that whole time,
 # we commit one mined manifest, gzipped, and serve it until the live one lands.
@@ -181,10 +201,44 @@ def load_cache() -> None:
 
 def save_cache() -> None:
     try:
-        DATA.mkdir(exist_ok=True)
+        DATA.mkdir(parents=True, exist_ok=True)
         CACHE_PATH.write_text(json.dumps({"v": CACHE_VERSION, "entries": _cache}))
     except Exception as exc:
         log(f"cache save failed: {exc}")
+
+
+def adopt_legacy_data() -> None:
+    """Carry a pre-0.2 in-tree data/ across to the state directory, once.
+
+    Until 0.2 everything the miner wrote sat beside the program, so replacing
+    the program replaced the history with it. Anyone who already has one has
+    spent thirteen minutes earning it and should not have to again. Copy rather
+    than move, and only into a state directory that does not yet exist: if any
+    of this goes wrong the old directory is untouched and the worst case is a
+    re-mine rather than a loss. Only data/ travels — seed/ is part of the
+    program, and a copy of it in the state directory would outlive the install
+    that owns it and go on being served after an upgrade replaced it.
+    """
+    # Guarded on the manifest, not on the directory: the launcher creates the
+    # state directory before this ever runs, so "does it exist" is always true
+    # and would skip every migration there is.
+    if (DATA / "manifest.json").exists() or not LEGACY_DATA.is_dir():
+        return
+    if not (LEGACY_DATA / "manifest.json").is_file():
+        return
+    carried = 0
+    try:
+        DATA.mkdir(parents=True, exist_ok=True)
+        for src in sorted(LEGACY_DATA.iterdir()):
+            if src.is_file() and not (DATA / src.name).exists():
+                shutil.copy2(src, DATA / src.name)
+                carried += 1
+    except Exception as exc:
+        log(f"could not carry the mined history across to {DATA}: {exc}")
+        return
+    if carried:
+        log(f"carried {carried} file(s) of mined history from {LEGACY_DATA} "
+            f"to {DATA} — the old copy is left where it is")
 
 
 # ---- the committed seed ------------------------------------------------------
@@ -206,7 +260,17 @@ def seed_meta() -> dict | None:
 
 
 def write_seed() -> str:
-    """Freeze the manifest on disk into the committed seed."""
+    """Freeze the manifest on disk into the committed seed.
+
+    A maintainer verb, not a user one: it writes into the program's own
+    directory, which an installed copy has no business being able to do. Refuse
+    early and say which it is, rather than failing on the write with a
+    permission error that reads like a bug.
+    """
+    if not os.access(SEED_DIR if SEED_DIR.is_dir() else ROOT, os.W_OK):
+        raise SystemExit(
+            f"--seed freezes a new seed into {SEED_DIR}, and this copy is "
+            f"installed read-only. Run it in a working tree.")
     manifest = json.loads((DATA / "manifest.json").read_text())
     manifest["seed"] = True
     cov = manifest.get("coverage") or {}
@@ -523,7 +587,7 @@ def mine_once() -> None:
         "events": events,
     }
 
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
     body = json.dumps(manifest, indent=1)
     manifest_path.write_text(body + "\n")
     (DATA / "manifest.js").write_text("window.SWARM_DATA = " + body + ";\n")
@@ -811,6 +875,30 @@ class QuietHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(blob)
             return
+        # /data/ is a URL the page asks for, and no longer a directory beneath
+        # the served root. Route it explicitly at the state directory: the
+        # fall-through below resolves against ROOT, which holds the program and
+        # not the history, so without this every mined manifest 404s while the
+        # seed branch above stops firing the moment one exists — an instrument
+        # that looks frozen rather than broken. Sits AFTER the seed branch on
+        # purpose: that branch owns the case where no mined manifest exists yet.
+        path = self.path.split("?")[0]
+        if path.startswith("/data/"):
+            name = path[len("/data/"):]
+            target = DATA / name
+            if "/" in name or name.startswith(".") or not target.is_file():
+                self.send_error(404)
+                return
+            blob = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "text/javascript" if name.endswith(".js")
+                             else "application/json" if name.endswith(".json")
+                             else "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob)
+            return
         super().do_GET()
 
     def do_POST(self):  # noqa: N802 — stdlib name
@@ -846,7 +934,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
 
 def serve() -> None:
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
 
     def miner():
         while True:
@@ -874,11 +962,12 @@ def main() -> None:
     ap.add_argument("--once", action="store_true", help="mine one pass and exit")
     ap.add_argument("--serve", action="store_true", help="serve the app + mine on an interval")
     ap.add_argument("--seed", action="store_true",
-                    help="freeze data/manifest.json into the committed seed/")
+                    help="maintainer verb: freeze the mined manifest into seed/")
     args = ap.parse_args()
     if args.seed:
         print(write_seed())
         return
+    adopt_legacy_data()
     load_cache()
     if args.serve:
         serve()
