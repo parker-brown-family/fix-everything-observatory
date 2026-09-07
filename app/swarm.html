@@ -26,6 +26,9 @@
     background:var(--bg); color:var(--blue);
     font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:300;
     height:100vh; display:grid; grid-template-rows:auto auto 1fr auto; overflow:hidden;
+    /* the implicit auto column is min-content floored, so one long footer row
+       could push the whole page wider than the window; pin it to the window. */
+    grid-template-columns:minmax(0,1fr);
   }
   header{
     display:flex; align-items:center; gap:20px; padding:9px 20px;
@@ -43,6 +46,7 @@
   button{
     font:inherit;font-size:10.5px;letter-spacing:.08em;padding:6px 11px;cursor:pointer;
     background:transparent;color:var(--cyan);border:1px solid var(--dim);
+    white-space:nowrap;
   }
   button:hover{border-color:var(--cyan)}
   button.sim{color:var(--violet);border-color:var(--violet)}
@@ -119,7 +123,7 @@
   }
   #scrub{flex:1;accent-color:var(--cyan);height:3px}
   #clock{font-size:11px;color:var(--fg);min-width:172px;text-align:right;white-space:nowrap}
-  .legend{font-size:9.5px;color:var(--ghost);white-space:nowrap}
+  .legend{font-size:9.5px;color:var(--ghost);white-space:nowrap;min-width:0;overflow:hidden}
   .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
   .sw.hatch{background:repeating-linear-gradient(45deg,transparent 0 2px,var(--dim) 2px 4px);border:1px solid var(--dim)}
 
@@ -190,7 +194,7 @@
 </main>
 <footer>
   <button id="playBtn" title="[space] replay history">▶ REPLAY</button>
-  <button id="speedBtn" title="[+/-] replay speed">0.5×</button>
+  <button id="speedBtn" title="[+/-] swarm motion speed">MOTION 0.5×</button>
   <input id="scrub" type="range" min="0" max="1000" value="1000">
   <div id="clock">—</div>
   <div class="legend">
@@ -228,8 +232,12 @@ function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt
 const SCOPES=[['all','ALL ARTIFACTS'],['agentic','AGENTIC ONLY'],['marker','MARKER ONLY']];
 let DATA=null, SIMDATA=null, SIM=false, SCOPEI=0;
 let T=0, playing=false, dragStrip=false, sel=null;
-const SPEEDS=[0.1,0.25,0.5,1,2,4]; let speedI=2, lastTs=0;
-const REPLAY_SECONDS=75;  // wall-clock seconds to replay the whole history at 1×
+/* Two independent clocks. `anim` is the swarm's own motion clock — orbit, wobble,
+   hive breath — and SPEEDS is the knob on it. The replay ramp is NOT on that knob;
+   it crosses the whole history in REPLAY_SECONDS of wall clock however fast the
+   swarm happens to be turning. */
+const SPEEDS=[0.1,0.25,0.5,1,2,4]; let speedI=2, lastTs=0, anim=0;
+const REPLAY_SECONDS=60;  // wall-clock seconds for the replay cursor to cross the history
 let hover=null, mouse={x:-1,y:-1,px:0,py:0};
 let hits=[], AGG=null, pings=[], G=null;
 let lastRailAt=0, lastFeedKey='', lastLiveT=0, hintGone=false;
@@ -555,7 +563,7 @@ function pingItem(it){
   const d=cur();if(!d||!G)return;
   const a=d.byNumber.get(it.number);
   let x,y;
-  if(a&&a.opened<=T&&(!a.closed||a.closed>T)){const p=posOf(a,G.zone,performance.now()/1000);x=p.x;y=p.y}
+  if(a&&a.opened<=T&&(!a.closed||a.closed>T)){const p=posOf(a,G.zone,anim);x=p.x;y=p.y}
   else {x=G.xOf?G.xOf(Math.min(it.t,cur().t1)):G.W/2;y=G.lane?G.lane.y+G.lane.h/2:G.H-160}
   const col=it.kind==='comment'?COL.cyan:it.kind==='merged'?COL.green:it.kind==='reopened'?COL.red:COL.ghost;
   pings.push({x,y,start:performance.now(),col});
@@ -606,14 +614,14 @@ function radiusOf(ageDays,zone,band){
   const rmax=Math.min(zone.w*0.38,zone.h*0.42);
   return Math.min(rmax,26+24*Math.log2(1+ageDays)+band*20);
 }
-function posOf(a,zone,tsec){
+function posOf(a,zone,motion){
   let s=a._s;
   if(!s){const R=rng((a.number*2654435761)>>>0);
     s=a._s={a0:R()*6.283,dir:R()<0.5?1:-1,ph:R()*6.283,band:R()};}
   const age=Math.max(0,(T-a.opened)/DAY);
   const r=radiusOf(age,zone,s.band);
-  const w=s.dir*(0.5/(1+age*0.4)+0.05);
-  const ang=s.a0+w*tsec,wob=Math.sin(tsec*0.8+s.ph)*4;
+  const w=s.dir*(0.25/(1+age*0.4)+0.025);
+  const ang=s.a0+w*motion,wob=Math.sin(motion*0.4+s.ph)*4;
   return {x:zone.cx+Math.cos(ang)*(r+wob)*1.45,y:zone.cy+Math.sin(ang)*(r+wob)*0.75};
 }
 function attrColor(a){
@@ -623,8 +631,9 @@ function attrColor(a){
 }
 
 function draw(ts){
-  const {W,H}=sizeCanvas(),tsec=ts/1000;
+  const {W,H}=sizeCanvas();
   const dt=lastTs?Math.min(120,ts-lastTs):16; lastTs=ts;
+  anim+=(dt/1000)*SPEEDS[speedI];   // motion clock — the only thing the speed knob scales
   const cfd={x:0,y:H-132,w:W,h:132};
   const lane={x:0,y:cfd.y-26,w:W,h:26};
   const zone={x:0,y:0,w:W,h:lane.y};zone.cx=W*0.5;zone.cy=zone.h*0.52;
@@ -638,7 +647,7 @@ function draw(ts){
   const d=cur();hits=[];
   if(d&&AGG){
     if(playing){
-      T+=(d.t1-d.t0)*(dt/1000)/REPLAY_SECONDS*SPEEDS[speedI];
+      T+=(d.t1-d.t0)*(dt/1000)/REPLAY_SECONDS;
       if(T>=d.t1){T=d.t1;setPlaying(false)}
       $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));}
     T=Math.min(d.t1,Math.max(d.t0,T));
@@ -661,7 +670,7 @@ function draw(ts){
     cx.setLineDash([]);
 
     /* hive */
-    const pulse=2*Math.sin(tsec*2);
+    const pulse=2*Math.sin(anim*2);
     cx.strokeStyle='rgba(122,162,247,0.55)';cx.lineWidth=1.5;
     cx.beginPath();cx.arc(zone.cx,zone.cy,15+pulse,0,7);cx.stroke();
     cx.strokeStyle='rgba(122,162,247,0.18)';
@@ -672,7 +681,7 @@ function draw(ts){
     /* alive swarm */
     for(const a of rows){
       if(a.opened>T||(a.closed&&a.closed<=T))continue;
-      const p=posOf(a,zone,tsec);
+      const p=posOf(a,zone,anim);
       const col=attrColor(a);
       const r=2.2+Math.min(3,a.comments*0.35);
       cx.save();
@@ -802,7 +811,7 @@ function setSim(v){
   refresh();
 }
 function dismissHint(){if(!hintGone){hintGone=true;const h=$('#hint');h.style.opacity='0';setTimeout(()=>h.remove(),1300)}}
-function setSpeed(i){speedI=Math.max(0,Math.min(SPEEDS.length-1,i));$('#speedBtn').textContent=SPEEDS[speedI]+'×'}
+function setSpeed(i){speedI=Math.max(0,Math.min(SPEEDS.length-1,i));$('#speedBtn').textContent='MOTION '+SPEEDS[speedI]+'×'}
 $('#speedBtn').onclick=()=>setSpeed(speedI+1<SPEEDS.length?speedI+1:0);
 $('#modeBtn').onclick=()=>{setSim(!SIM)};
 $('#scopeBtn').onclick=()=>{SCOPEI=(SCOPEI+1)%SCOPES.length;$('#scopeBtn').textContent=SCOPES[SCOPEI][1];lastFeedKey='';refresh()};

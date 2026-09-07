@@ -33,8 +33,13 @@ Click the Omarchy chip in the bar tray → the swarm opens.
   an inspector: the whole chronological story — opened → labelled → commented →
   closed → reopened → merged — joined from the issues, comments, and events
   feeds, with real comment snippets and a GitHub link.
-- **Replay** — `space` plays the whole history from the beginning; the scrubber
-  and dragging the flow area move the cursor by hand; `←/→` step a day.
+- **Replay** — `space` plays the whole history from the beginning, crossing it
+  in a minute of wall clock; the scrubber and dragging the flow area move the
+  cursor by hand; `←/→` step a day.
+- **Motion** — the `MOTION` button and `+/-` set how fast the swarm itself
+  turns: the motes' orbit around the hive, their wobble, the hive's breath.
+  It is a knob on the animation, not on the replay — the replay takes its
+  minute whatever the swarm is doing. Default is 0.5×.
 - **Simulation** — `l` toggles a watermarked synthetic 180-day healing arc, for
   demoing the shape before the wild data is rich.
 
