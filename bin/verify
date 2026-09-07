@@ -89,8 +89,20 @@ fi
 # whoever is not. Two-space indent means a direct child of the root, which is
 # the house formatting and what distinguishes it from the many nested
 # `column.implicitHeight` bindings inside a panel body.
-if [[ -n ${entry:-} && -f "$root/$entry" ]] \
-   && jq -e '.kinds | index("bar-widget")' "$mf" >/dev/null 2>&1; then
+#
+# The guard has its own skip branches, and the reason is this gate's whole
+# argument turned on itself: a check that did not run is unmeasured, never a
+# pass. Written first without them, this was the only conditional check here
+# with no branch for "did not apply" — so if .kinds ever stopped declaring
+# bar-widget, the check would evaporate and a reader would see a clean gate and
+# count one more passing check than actually ran. Nothing in that output
+# distinguished "did not apply" from "passed", which is the same collapse the
+# induction battery exists to prevent.
+if [[ -z ${entry:-} || ! -f "$root/$entry" ]]; then
+  skip "bar-widget root sizing unchecked — there is no entry point to read (the error is above)"
+elif ! jq -e '.kinds | index("bar-widget")' "$mf" >/dev/null 2>&1; then
+  skip "bar-widget root sizing does not apply — .kinds no longer declares bar-widget"
+else
   missing=()
   grep -qE '^  implicitWidth:' "$root/$entry"  || missing+=(implicitWidth)
   grep -qE '^  implicitHeight:' "$root/$entry" || missing+=(implicitHeight)
