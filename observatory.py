@@ -520,8 +520,15 @@ def mine_once() -> None:
     events.sort(key=lambda e: e["created_at"] or "")
 
     manifest_path = DATA / "manifest.json"
-    if not arts and err and manifest_path.exists():
-        log(f"mine failed ({err}) — keeping previous manifest")
+    # A cycle that fetched NOTHING is a failed cycle, not a small slice, and the
+    # log has to say which. Before the seed existed this branch could only fire
+    # against a manifest on disk, so a failed first cycle fell through to the
+    # slice guard below and was reported as "a slice (0 artifacts)" — which reads
+    # as a measurement rather than as an error with a cause. Same rule as the
+    # manifest itself: 300 of 8,892 and nothing at all are different findings.
+    if not arts and err and (manifest_path.exists() or seed_meta()):
+        held = "previous manifest" if manifest_path.exists() else "committed seed"
+        log(f"mine failed ({err}) — keeping the {held}")
         save_cache()
         return
 
