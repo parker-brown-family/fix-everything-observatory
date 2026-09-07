@@ -645,6 +645,12 @@ function renderInspector(){
         body:JSON.stringify({number:a.number})});
       const j=await r.json();
       ab.textContent=j.ok?'⚡ AGENT SPAWNED — check your terminal':'✕ '+(j.error||'allocation failed');
+      // the server knows things the button cannot: which claude it found, or
+      // that the one it found did not answer. Say it here rather than letting
+      // the user discover a dead agent in a terminal we already called a win.
+      if(j.note){const n=document.createElement('div');
+        n.className='fogchip';n.style.marginTop='6px';n.textContent=j.note;
+        ab.insertAdjacentElement('afterend',n)}
       if(!j.ok)ab.disabled=false;
     }catch(_){ab.textContent='✕ observatory server not reachable';ab.disabled=false}
   };

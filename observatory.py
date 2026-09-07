@@ -574,6 +574,76 @@ def agent_prompt(art, comments) -> str:
     return "\n".join(lines)
 
 
+# What the terminal runs when we spawn `claude` ourselves. It holds the window
+# open on ANY nonzero exit and says what the failure means, because the button
+# has already told the user "AGENT SPAWNED" by the time this fires. The one
+# that bit us: Claude Code v2.1.251 could not resolve the configured model
+# alias and died with "There's an issue with the selected model (default)" —
+# an agent dead on arrival behind a button that looked like it worked. We
+# cannot preflight that (proving the model resolves costs a real session), so
+# we name the fix where the failure actually surfaces.
+AGENT_SHELL = (
+    'claude "$(cat {prompt})"; rc=$?; [ "$rc" -eq 0 ] && exit 0; echo; '
+    'echo "[fix-everything-observatory] claude exited $rc — the agent never ran."; '
+    'echo "  If it named a model it does not recognise, your Claude Code is too'
+    ' old for your configured model. Fix:  mise upgrade claude"; '
+    'echo "  The prompt is kept at {prompt} — nothing was lost."; '
+    'echo; echo "[enter closes this window]"; read -r'
+)
+PREFLIGHT_TIMEOUT = 6
+
+
+def mise_outdated(tool: str):
+    """(installed, latest) when mise says the tool is behind — else None.
+
+    None means UNKNOWN, never "up to date": mise may be absent, may not manage
+    this tool, or may fail. `mise outdated` lists only what IS behind, so a line
+    for the tool is the finding and no line is silence, not a clean bill.
+    """
+    if not shutil.which("mise"):
+        return None
+    try:
+        p = subprocess.run(["mise", "outdated", tool], capture_output=True,
+                           text=True, timeout=PREFLIGHT_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (p.stdout or "").splitlines():
+        f = line.split()
+        if len(f) >= 4 and f[0] == tool:
+            return f[2], f[3]
+    return None
+
+
+def claude_preflight():
+    """Is the agent we are about to spawn runnable at all? -> (ok, note).
+
+    Deliberately modest about what it can prove. That `claude` exists on PATH
+    and answers `--version` is checkable in a few milliseconds and worth
+    refusing on. That its configured model resolves is NOT checkable without
+    paying for a session, so this never claims it — a note is a warning the
+    page shows beside a spawn that still happens, never a silent pass.
+    """
+    exe = shutil.which("claude")
+    if not exe:
+        return False, ("no `claude` on PATH — install Claude Code, or point "
+                       "FIX_OBSERVATORY_AGENT_CMD at your own agent")
+    try:
+        p = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                           timeout=PREFLIGHT_TIMEOUT, env=clean_agent_env())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return True, f"`claude --version` did not answer ({exc}) — spawning anyway"
+    if p.returncode != 0:
+        return True, (f"`claude --version` exited {p.returncode} — spawning anyway; "
+                      "if the terminal dies on a model error, run `mise upgrade claude`")
+    ver = (p.stdout or "").strip()
+    behind = mise_outdated("claude")
+    if behind:
+        return True, (f"claude {behind[0]} is behind {behind[1]} — an older Claude Code "
+                      "cannot resolve every configured model, and that failure lands "
+                      "inside the spawned terminal. Fix: mise upgrade claude")
+    return True, f"claude {ver}" if ver else None
+
+
 def clean_agent_env():
     """The environment a freshly-launched claude should see — never a child of us.
 
@@ -590,34 +660,40 @@ def clean_agent_env():
 
 
 def allocate_agent(number: int):
+    """Returns (error, warning). Either may be None; an error means no spawn."""
     try:
         manifest = json.loads((DATA / "manifest.json").read_text())
     except Exception as exc:
-        return f"manifest unreadable: {exc}"
+        return f"manifest unreadable: {exc}", None
     art = next((a for a in manifest.get("artifacts", [])
                 if a.get("number") == number), None)
     if art is None:
-        return f"#{number} is not in the manifest"
+        return f"#{number} is not in the manifest", None
     pf = DATA / f"agent-prompt-{number}.md"
     pf.write_text(agent_prompt(art, manifest.get("comments") or []))
     q = shlex.quote(str(pf))
+    # A custom agent command is the operator's business — we preflight only the
+    # `claude` we chose to run ourselves.
+    note = None
     if AGENT_CMD:
         cmd = ["bash", "-lc", AGENT_CMD.format(prompt_file=q)]
     else:
         term = find_terminal()
         if not term:
-            return "no terminal emulator found — set FIX_OBSERVATORY_AGENT_CMD"
-        cmd = [term, "-e", "bash", "-lc",
-               f'claude "$(cat {q})" || {{ echo; echo "[fix-everything-observatory]'
-               f' could not run claude"; read -r; }}']
+            return "no terminal emulator found — set FIX_OBSERVATORY_AGENT_CMD", None
+        ok, note = claude_preflight()
+        if not ok:
+            return note, None
+        cmd = [term, "-e", "bash", "-lc", AGENT_SHELL.format(prompt=q)]
     try:
         subprocess.Popen(cmd, cwd=AGENT_CWD, start_new_session=True,
                          env=clean_agent_env(),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
-        return f"spawn failed: {exc}"
-    log(f"allocated agent for #{number} ({cmd[0]})")
-    return None
+        return f"spawn failed: {exc}", None
+    log(f"allocated agent for #{number} ({cmd[0]}"
+        f"{'; ' + note if note else ''})")
+    return None, note
 
 
 # ---- server -------------------------------------------------------------------
@@ -644,8 +720,9 @@ class QuietHandler(SimpleHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError):
             self.send_error(400, "bad body")
             return
-        err = allocate_agent(number)
-        body = json.dumps({"ok": err is None, "error": err}).encode()
+        err, note = allocate_agent(number)
+        body = json.dumps({"ok": err is None, "error": err,
+                           "note": note}).encode()
         self.send_response(200 if err is None else 409)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

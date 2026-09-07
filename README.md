@@ -45,7 +45,12 @@ Click the Omarchy chip in the bar tray → the swarm opens.
   destination — `data/agent-report-<n>.md` — since a report left in a disposable
   terminal's scrollback is a report nobody read, says this box is a live Omarchy
   install (the honest repro surface, and the hazard), and never posts to GitHub
-  unasked. The button
+  unasked. Before spawning its own `claude` the server preflights it — no
+  `claude` on PATH refuses the spawn outright, and a version `mise` reports as
+  behind warns in the inspector, because an older Claude Code cannot resolve
+  every configured model and that failure lands *inside* a terminal the button
+  has already called a success. The spawn itself holds the window open on any
+  nonzero exit and names the fix. The button
   exists only on a local instance — the page POSTs to the local server, which
   spawns the agent; a hosted copy of the page has no server behind it and never
   renders it. The endpoint requires a custom header, so a random web page cannot
