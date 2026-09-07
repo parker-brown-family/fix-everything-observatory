@@ -501,6 +501,21 @@ def agent_prompt(art, comments) -> str:
     return "\n".join(lines)
 
 
+def clean_agent_env():
+    """The environment a freshly-launched claude should see — never a child of us.
+
+    If the tracker server was itself started from inside a Claude Code session
+    (running `serve` from a claude shell, say), it inherits that session's
+    CLAUDE_CODE_* markers, and a naive spawn passes them down: the allocated
+    agent then comes up as a CHILD session with transcript saving off and a
+    pinned model it may not resolve. Stripping every CLAUDE_CODE_* var (and a
+    couple of model pins) makes it a normal top-level session that reads the
+    user's settings fresh — the same session they'd get typing `claude`.
+    """
+    drop = ("CLAUDE_CODE_", "CLAUDECODE", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")
+    return {k: v for k, v in os.environ.items() if not k.startswith(drop)}
+
+
 def allocate_agent(number: int):
     try:
         manifest = json.loads((DATA / "manifest.json").read_text())
@@ -524,6 +539,7 @@ def allocate_agent(number: int):
                f' could not run claude"; read -r; }}']
     try:
         subprocess.Popen(cmd, cwd=AGENT_CWD, start_new_session=True,
+                         env=clean_agent_env(),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
         return f"spawn failed: {exc}"
