@@ -4,5 +4,6 @@ data/manifest.js
 data/http-cache.json
 data/*.log
 data/agent-prompt-*.md
+data/agent-report-*.md
 __pycache__/
 *.pyc

@@ -9,6 +9,10 @@ Doctrine:
 - The omarchy-fix-event:v1 marker (contract/omarchy-fix-event-v1.md) is the only
   definitive attribution; smell signals are named, scored heuristics.
 - Unknown is never zero: coverage gaps, rate budget, and horizon are recorded.
+- classify() always returns an explicit attribution, so every artifact this
+  miner writes carries one. The page still keeps a fifth value, 'unmeasured',
+  for a manifest that does not — it renders as a hollow mote and reaches an
+  allocated agent's prompt spelled out, because a hole is not a clean score.
 - All requests are conditional (ETags); 304s are free against the rate limit.
 
 Stdlib only. With GITHUB_TOKEN / GH_TOKEN every stream is walked to its end;
@@ -465,6 +469,64 @@ def find_terminal():
     return None
 
 
+# The prompt is the entire briefing an allocated agent ever gets, so it carries
+# four things the ticket itself does not. What KIND of job this is: a bug report
+# is diagnosed, a proposed change is REVIEWED, and telling a reviewer to "state
+# what the failure actually is" invents a failure for a PR that is working as
+# intended. Where the deliverable goes: a report that ends in the agent's
+# scrollback is a report nobody read. What machine it is standing on: this box
+# is a live Omarchy install, which is both the honest reproduction surface and
+# the thing it can break. And what our own attribution field means, which is
+# private vocabulary a fresh agent has never seen.
+ATTRIBUTION_GLOSS = {
+    "marker": "carries the omarchy-fix-event:v1 marker — definitively autospawned",
+    "smell": "scored >= 2 on our named agent-smell signals — probably agent-written",
+    "hint": "one weak agent-smell signal — suggestive, not evidence",
+    "none": "no agent signal in the title or body — human, as far as we looked",
+}
+
+
+def attribution_phrase(art) -> str:
+    """Absent is not "none".
+
+    An artifact whose attribution was never recorded is UNMEASURED, and the
+    prompt has to say so: "none" tells the agent we scored this ticket and it
+    came up clean, which is a different claim from never having scored it.
+    """
+    value = art.get("attribution")
+    if not value:
+        return "unmeasured — never scored, which is NOT the same as scoring clean"
+    gloss = ATTRIBUTION_GLOSS.get(value, "unrecognised class; treat as unmeasured")
+    return f"{value} — {gloss}"
+
+
+ISSUE_JOB = [
+    "2. Orient: find the code, config, or subsystem this points at, and state",
+    "   what the failure actually is in your own words.",
+    "3. If it can be reproduced safely on this machine, try; otherwise say",
+    "   exactly what a reproduction would need.",
+    "4. Deliver: a diagnosis hypothesis, the check that would confirm or refute",
+    "   it, and concrete suggested next steps (or a fix sketch).",
+]
+
+PR_JOB = [
+    "2. Read the change itself:  gh pr diff {n} --repo {repo}",
+    "3. Assess the CLAIM, not a failure — this is a proposed change, and there",
+    "   may be nothing wrong with it. Does the diff do what its description",
+    "   says? Is that the right thing to do here? Name what it breaks, what it",
+    "   leaves unhandled, and what it duplicates.",
+    "4. Exercise it only through steps you can revert — read the files it",
+    "   touches, check it out in a scratch clone. Say plainly what you did NOT",
+    "   run, and why.",
+    "5. Deliver a verdict — MERGE / CHANGES REQUESTED / DECLINE — with specific",
+    "   reasons, per hunk where it matters.",
+]
+
+
+def report_path(number) -> Path:
+    return DATA / f"agent-report-{number}.md"
+
+
 def agent_prompt(art, comments) -> str:
     kind = art.get("kind") or "issue"
     n = art.get("number")
@@ -476,24 +538,35 @@ def agent_prompt(art, comments) -> str:
         "",
         f"  {REPO}#{n} — {art.get('title') or '(untitled)'}",
         f"  {art.get('url') or ''}",
-        f"  {kind} · opened {art.get('opened_at')} by @{art.get('author')}"
-        f" · attribution: {art.get('attribution')}",
+        f"  {kind} · opened {art.get('opened_at')} by @{art.get('author')}",
+        f"  attribution: {attribution_phrase(art)}",
     ]
     if art.get("labels"):
         lines.append("  labels: " + ", ".join(art["labels"]))
     if recent:
         lines += [""] + ["Recent comments:"] + [
             f"  - @{c.get('author')}: \"{c.get('snippet')}\"" for c in recent]
+    job = PR_JOB if kind == "pr" else ISSUE_JOB
     lines += [
         "",
         "Your job, in order:",
         f"1. Read the whole thread:  gh {gh_verb} view {n} --repo {REPO} --comments",
-        "2. Orient: find the code, config, or subsystem this points at, and state",
-        "   what the failure actually is in your own words.",
-        "3. If it can be reproduced safely on this machine, try; otherwise say",
-        "   exactly what a reproduction would need.",
-        "4. Deliver: a diagnosis hypothesis, the check that would confirm or refute",
-        "   it, and concrete suggested next steps (or a fix sketch).",
+    ] + [step.format(n=n, repo=REPO) for step in job] + [
+        "",
+        "Write the deliverable here — markdown, and it IS the report.",
+        "Scrollback is not: this terminal is disposable and nobody will",
+        "scroll it.",
+        "",
+        f"  {report_path(n)}",
+        "",
+        "Say what you checked, what you could NOT check, and what you are",
+        "only guessing. Unknown is not zero here either.",
+        "",
+        "This machine is a LIVE OMARCHY INSTALL — the same system the ticket is",
+        "about. That makes it the honest reproduction surface and the hazard at",
+        "once. Read anything; run nothing that installs, overwrites, or updates",
+        "in order to test a theory. Prefer a copy under /tmp to touching",
+        "~/.config or ~/.local/share/omarchy, and never run omarchy-update.",
         "",
         "Do NOT post to GitHub or take any public action unless explicitly asked.",
         "",

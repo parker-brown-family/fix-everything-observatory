@@ -275,7 +275,11 @@ function normalize(raw){
     opened:Date.parse(a.opened_at),
     closed:a.closed_at?Date.parse(a.closed_at):null,
     merged:!!a.merged_at,
-    attribution:a.attribution||'none',
+    /* Absent is NOT 'none'. 'none' is a finding — we scored this artifact
+       and no agent signal fired. A manifest that never carried the field
+       (an older miner, a half-written file) is telling us nobody looked,
+       and every consumer below draws that as its own thing. */
+    attribution:a.attribution||'unmeasured',
     smell:a.smell||{score:0,signals:[]},
     marker:a.marker||null,
     reopenedFlag:a.state_reason==='reopened',
@@ -351,12 +355,16 @@ function simulate(){
     reopens:stream.filter(s=>s.kind==='reopened'),t0,t1:now,sim:true};
 }
 
+/* The three classes that are positive evidence of an agent. 'none' is
+   evidence of absence; 'unmeasured' is absence of evidence, and belongs to
+   neither side of the count. */
+const AGENTIC=new Set(['marker','smell','hint']);
 function cur(){return SIM?SIMDATA:DATA}
 function scopeKey(){return SCOPES[SCOPEI][0]}
 function inScope(a){
   const k=scopeKey();
   if(k==='all')return true;
-  if(k==='agentic')return a.attribution!=='none';
+  if(k==='agentic')return AGENTIC.has(a.attribution);
   return a.attribution==='marker';
 }
 /* Both of these are re-asked every animation frame and neither changes between
@@ -445,7 +453,7 @@ function renderStats(){
   const settledRows=born.filter(a=>a.closed&&a.closed<=T);
   const merged=settledRows.filter(a=>a.merged).length;
   let reo=0;for(const a of born)if(d.reopened.has(a.number))reo++;
-  const agentic=born.filter(a=>a.attribution!=='none').length;
+  const agentic=born.filter(a=>AGENTIC.has(a.attribution)).length;
   const marker=born.filter(a=>a.attribution==='marker').length;
   const comm=streamInScope(d).filter(s=>s.kind==='comment'&&s.t<=T).length;
   setTween('openNow',openNow);setTween('opened',born.length);setTween('settled',settledRows.length);
@@ -536,7 +544,7 @@ function renderRail(){
   const b7=countBorn(rows,T-7*DAY,T,artH);
   const b7p=countBorn(rows,T-14*DAY,T-7*DAY,artH);
   const trend=(b7==null||b7p==null)?null:(b7<=b7p?'▼ quieter':'▲ louder');
-  const attr={marker:0,smell:0,hint:0,none:0};
+  const attr={marker:0,smell:0,hint:0,none:0,unmeasured:0};
   for(const a of d.artifacts)attr[a.attribution]=(attr[a.attribution]||0)+1;
   const cov=d.coverage||{};
   rail.innerHTML=`
@@ -562,6 +570,7 @@ function renderRail(){
   <div class="kv"><span>agent smell (score ≥ 2)</span><b class="v">${attr.smell}</b></div>
   <div class="kv"><span>hint (one weak signal)</span><b class="y">${attr.hint}</b></div>
   <div class="kv"><span>no signal</span><b>${attr.none}</b></div>
+  ${attr.unmeasured?`<div class="kv"><span><span class="unk" title="the manifest carries no attribution for these artifacts at all — they were never scored, which is not the same as scoring clean. Grey hollow motes.">never scored</span></span><b class="r">${attr.unmeasured}</b></div>`:''}
   <h3>COVERAGE</h3>
   <div class="kv"><span>artifacts fetched</span><b class="${cov.complete?'g':'y'}">${cov.fetched_count??d.artifacts.length}${cov.complete?' · all':''}</b></div>
   <div class="kv"><span>open in manifest</span><b>${d.artifacts.filter(a=>!a.closed).length}</b></div>
@@ -617,7 +626,7 @@ function renderInspector(){
   <div class="kv"><span>opened</span><b>${fmtDate(a.opened)}</b></div>
   <div class="kv"><span>${a.closed?'settled':'age'}</span><b class="${a.closed?'':'y'}">${a.closed?fmtDate(a.closed):fmtDur(Date.now()-a.opened)+' and counting'}</b></div>
   <div class="kv"><span>lifespan</span><b class="c">${a.closed?fmtDur(a.closed-a.opened):'—'}</b></div>
-  <div class="kv"><span>attribution</span><b class="${a.attribution==='marker'?'c':a.attribution==='smell'?'v':a.attribution==='hint'?'y':''}">${a.attribution}</b></div>
+  <div class="kv"><span>attribution</span><b class="${a.attribution==='marker'?'c':a.attribution==='smell'?'v':a.attribution==='hint'?'y':a.attribution==='unmeasured'?'r':''}">${a.attribution==='unmeasured'?'<span class="unk" title="this artifact carries no attribution in the manifest — it was never scored. Not the same as scoring clean.">never scored</span>':esc(a.attribution)}</b></div>
   ${a.smell.signals.length?`<div style="margin:3px 0 0">${a.smell.signals.map(s=>`<span class="chip v">${esc(s)}</span>`).join('')}</div>`:''}
   ${a.labels.length?`<div style="margin:4px 0 0">${a.labels.map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div>`:''}
   ${a.marker?`<div class="fogchip" style="border-style:solid;border-color:var(--cyan);background:none;color:var(--cyan)">omarchy-fix-event:v${a.marker.version} · ${esc(a.marker.source||'?')}</div>`:''}
@@ -700,7 +709,8 @@ function moteSprite(col,attribution,isPR,r,reo,dpr){
   const key=col+'|'+attribution+'|'+isPR+'|'+r+'|'+reo+'|'+dpr;
   let sp=SPRITES.get(key);
   if(sp)return sp;
-  const blur=attribution==='none'?0:attribution==='smell'?12:9;
+  const hollow=attribution==='unmeasured';
+  const blur=attribution==='none'||hollow?0:attribution==='smell'?12:9;
   const half=Math.ceil(r+(reo?4:0)+blur+2);
   const off=document.createElement('canvas');
   off.width=off.height=Math.ceil(half*2*dpr);
@@ -708,9 +718,12 @@ function moteSprite(col,attribution,isPR,r,reo,dpr){
   g.setTransform(dpr,0,0,dpr,0,0);
   g.translate(half,half);
   if(blur){g.shadowColor=col;g.shadowBlur=blur}
-  g.fillStyle=col;
-  if(isPR){const q=r+1.4;g.beginPath();g.moveTo(0,-q);g.lineTo(q,0);g.lineTo(0,q);g.lineTo(-q,0);g.closePath();g.fill()}
-  else{g.beginPath();g.arc(0,0,r,0,7);g.fill()}
+  g.fillStyle=col;g.strokeStyle=col;g.lineWidth=1.1;
+  // An unmeasured mote is drawn HOLLOW. A dim filled dot would read as one
+  // more artifact we scored and found clean; the hole is the whole point.
+  const ink=hollow?()=>g.stroke():()=>g.fill();
+  if(isPR){const q=r+1.4;g.beginPath();g.moveTo(0,-q);g.lineTo(q,0);g.lineTo(0,q);g.lineTo(-q,0);g.closePath();ink()}
+  else{g.beginPath();g.arc(0,0,r,0,7);ink()}
   g.shadowBlur=0;
   if(reo){g.strokeStyle=COL.red;g.lineWidth=1;g.beginPath();g.arc(0,0,r+3,0,7);g.stroke()}
   sp={cv:off,half,size:half*2};
@@ -782,7 +795,9 @@ function spawnCrossings(d,zone){
 function attrColor(a){
   return a.attribution==='marker'?COL.cyan
     :a.attribution==='smell'?COL.violet
-    :a.attribution==='hint'?COL.yellow:COL.ghost;
+    :a.attribution==='hint'?COL.yellow
+    :a.attribution==='unmeasured'?COL.dim   // hollow, and dimmer than 'none'
+    :COL.ghost;
 }
 
 function draw(ts){
@@ -989,7 +1004,7 @@ function draw(ts){
   if(hover){
     const a=hover.a,age=fmtDur((a.closed&&a.closed<=T?a.closed:T)-a.opened);
     tip.innerHTML=`<b style="color:${attrColor(a)}">#${a.number} · ${a.kind.toUpperCase()}</b>
-      · ${age} old · ${a.attribution}${a.smell.signals.length?' ('+a.smell.signals.join(', ')+')':''}${cur().reopened.has(a.number)?' · <span style="color:var(--red)">reopened</span>':''}
+      · ${age} old · ${a.attribution==='unmeasured'?'<span style="color:var(--dim)">never scored</span>':esc(a.attribution)}${a.smell.signals.length?' ('+a.smell.signals.join(', ')+')':''}${cur().reopened.has(a.number)?' · <span style="color:var(--red)">reopened</span>':''}
       <div class="t2">${esc(a.title.slice(0,90))} — @${esc(a.author)} · click for the story</div>`;
     tip.style.display='block';
     tip.style.left=Math.min(window.innerWidth-450,mouse.px+14)+'px';

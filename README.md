@@ -17,8 +17,9 @@ Click the Omarchy chip in the bar tray → the swarm opens.
 - **The swarm** — every open ticket orbits the repo hive; orbit radius = age
   (labelled 1 day / 1 week / 1 month rings). Circles are issues, diamonds are
   PRs. Colour is attribution: **cyan** = carries the fix-event marker, **violet**
-  = smells agentic, **yellow** = one weak signal, **ghost** = no signal. Reopened
-  tickets wear a red ring.
+  = smells agentic, **yellow** = one weak signal, **ghost** = no signal, and a
+  **hollow dim outline** = never scored at all, which is not the same as scoring
+  clean. Reopened tickets wear a red ring.
 - **Stats bar** — OPEN NOW · OPENED · SETTLED · MERGED · REOPENED ·
   AGENT-SMELLING · MARKER · COMMENTS, all tracking the scrub cursor and
   animating during replay.
@@ -36,8 +37,15 @@ Click the Omarchy chip in the bar tray → the swarm opens.
 - **Allocate an agent** — on an open ticket the inspector shows a one-click
   `⚡ ALLOCATE AGENT` button, the omarchy error-notification pattern pointed at a
   repair: it opens a terminal running `claude` primed with the ticket's title,
-  author, provenance, and latest comments, and a standing brief to orient, form a
-  diagnosis, and suggest next steps (never posting to GitHub unasked). The button
+  author, provenance, and latest comments. The brief is shaped by what the ticket
+  *is* — an issue gets a diagnosis job (orient, reproduce if it is safe, deliver a
+  hypothesis and the check that would refute it), a PR gets a review job (read the
+  diff, assess the claim on its merits, verdict of merge / changes / decline),
+  because telling a reviewer to "find the failure" invents one. It names a written
+  destination — `data/agent-report-<n>.md` — since a report left in a disposable
+  terminal's scrollback is a report nobody read, says this box is a live Omarchy
+  install (the honest repro surface, and the hazard), and never posts to GitHub
+  unasked. The button
   exists only on a local instance — the page POSTs to the local server, which
   spawns the agent; a hosted copy of the page has no server behind it and never
   renders it. The endpoint requires a custom header, so a random web page cannot
@@ -81,6 +89,15 @@ and ships the evidence, so the inspector can say *why* something smells:
 Attribution taxonomy: **marker** (definitive) → **smell** (score ≥ 2) →
 **hint** (score 1) → **none**. A missing smell means "no signal matched",
 never "human-confirmed".
+
+There is a fifth value the miner never writes: **unmeasured**. `classify()`
+always returns one of the four above, so a manifest this miner produced has an
+explicit attribution on every artifact — but a manifest from an older schema, a
+half-written file, or somebody else's tooling might not, and the page will not
+quietly read that hole as `none`. It renders as a hollow mote, counts as
+**never scored** in the rail, and reaches an allocated agent's prompt spelled
+out. `none` is a finding; unmeasured is the absence of one, and they are not
+allowed to be the same grey dot.
 
 ## Parts
 
