@@ -1211,6 +1211,15 @@ def allocate_agent(proj: "Project", number: int):
 
 
 # ---- server -------------------------------------------------------------------
+# Which API routes read and which write. Only used to answer HEAD with an
+# honest Allow header, but keeping the two lists named is what stops a route
+# being added to one half and silently inheriting the other half's manners.
+READ_ROUTES = frozenset({"/api/caps", "/api/projects", "/api/scan",
+                         "/api/preflight", "/api/complete"})
+WRITE_ROUTES = frozenset({"/api/allocate", "/api/induct", "/api/forget",
+                          "/api/active", "/api/roots", "/api/mine"})
+
+
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):  # noqa: N802 — stdlib name
         pass
@@ -1219,13 +1228,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
-    def _json(self, code: int, payload: dict) -> None:
-        body = json.dumps(payload).encode()
+    def _json(self, code: int, payload: dict, body: bool = True) -> None:
+        blob = json.dumps(payload).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(blob)))
         self.end_headers()
-        self.wfile.write(body)
+        if body:                     # a HEAD gets the headers and nothing else
+            self.wfile.write(blob)
 
     def _query(self) -> dict:
         from urllib.parse import parse_qs, urlparse
@@ -1287,62 +1297,122 @@ class QuietHandler(SimpleHTTPRequestHandler):
         # one data path and always has — the slug rides as a parameter rather
         # than as a second URL shape, so a page from an older install still
         # asks a question this server can answer.
-        if path == "/data/manifest.js" or path == "/data/manifest.json":
-            proj = project(q.get("project"))
-            name = path[len("/data/"):]
-            target = proj.manifest_js if name.endswith(".js") else proj.manifest_path
-            # Until the first cycle finishes, hand the committed seed over
-            # under the live manifest's own name — the page asks for one thing
-            # and gets the best picture that exists. Only the repository the
-            # seed is actually of: an inducted project served omarchy's seed
-            # would be a confident, wrong instrument. Gzip goes over the wire
-            # as gzip: 11MB of JSON is 1.2MB compressed, inflated for free.
-            if (not target.exists() and name.endswith(".js")
-                    and proj.slug == default_slug() and seed_meta()):
-                blob = SEED_JS_GZ.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/javascript")
-                self.send_header("Content-Encoding", "gzip")
-                self.send_header("Content-Length", str(len(blob)))
-                self.end_headers()
-                self.wfile.write(blob)
-                return
-            if not target.is_file():
-                # Not an error, and not an empty repository either. A project
-                # inducted a minute ago has no manifest yet; saying so lets the
-                # page draw "mining" rather than a swarm of nothing.
-                self._json(404, {"error": "no manifest yet",
-                                 "slug": proj.slug, "mining": proj.mining})
-                return
-            blob = target.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/javascript"
-                             if name.endswith(".js") else "application/json")
-            self.send_header("Content-Length", str(len(blob)))
-            self.end_headers()
-            self.wfile.write(blob)
-            return
         if path.startswith("/data/"):
-            self.send_error(404)
+            self._serve_manifest(path, q, body=True)
             return
 
-        # ---- static, and ONLY the app
-        # The handler is rooted at the install, which holds the whole git
-        # checkout: .git/config, the handoffs, the source of this file. None of
-        # that has ever been something the page asks for, and a directory
-        # served because one file in it was wanted is how the rest of it
-        # becomes someone's finding later. Measured on this machine, where the
-        # plugin directory is a symlink to a working tree, so the exposure
-        # reached harvested agent sessions rather than just a public clone.
+        # Anything left is a file request, and send_head below decides whether
+        # it may be answered — for every verb, not just this one.
+        super().do_GET()
+
+    def do_HEAD(self):  # noqa: N802 — stdlib name
+        """The same answers as GET, minus the bodies.
+
+        Written out rather than inherited because inheriting it is precisely
+        what went wrong: the base class's do_HEAD knew nothing about this
+        server's routes, so every one of them answered from the filesystem
+        instead. The API routes are GET-only and say so with a 405 — a verb
+        this server does not serve is a different fact from a path it does not
+        have, and answering 404 to both is how "GET is closed" got read as
+        "closed", which it was not.
+        """
+        path = self.path.split("?")[0]
+        if path.startswith("/data/"):
+            self._serve_manifest(path, self._query(), body=False)
+            return
+        if path in READ_ROUTES or path in WRITE_ROUTES:
+            self.send_response(405)
+            self.send_header("Allow", "GET" if path in READ_ROUTES else "POST")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path.startswith("/api/"):
+            # A route that is in neither set does not exist, and 405 would
+            # claim it does. Same rule as everywhere else here: do not answer
+            # with a fact nobody measured.
+            self.send_error(404)
+            return
+        super().do_HEAD()
+
+    # ---- the manifest, per project ------------------------------------------
+    # `?project=` names which; absent means the active one. The page has one
+    # data path and always has — the slug rides as a parameter rather than as a
+    # second URL shape, so a page from an older install still asks a question
+    # this server can answer.
+    def _serve_manifest(self, path: str, q: dict, body: bool) -> None:
+        name = path[len("/data/"):]
+        if name not in ("manifest.js", "manifest.json"):
+            self.send_error(404)
+            return
+        proj = project(q.get("project"))
+        target = proj.manifest_js if name.endswith(".js") else proj.manifest_path
+        # Until the first cycle finishes, hand the committed seed over under
+        # the live manifest's own name — the page asks for one thing and gets
+        # the best picture that exists. Only the repository the seed is
+        # actually of: an inducted project served omarchy's seed would be a
+        # confident, wrong instrument. Gzip goes over the wire as gzip: 11MB of
+        # JSON is 1.2MB compressed, and the browser inflates it for free.
+        if (not target.exists() and name.endswith(".js")
+                and proj.slug == default_slug() and seed_meta()):
+            blob = SEED_JS_GZ.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            if body:
+                self.wfile.write(blob)
+            return
+        if not target.is_file():
+            # Not an error, and not an empty repository either. A project
+            # inducted a minute ago has no manifest yet; saying so lets the
+            # page draw "mining" rather than a swarm of nothing.
+            self._json(404, {"error": "no manifest yet", "slug": proj.slug,
+                             "mining": proj.mining}, body=body)
+            return
+        blob = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/javascript"
+                         if name.endswith(".js") else "application/json")
+        self.send_header("Content-Length", str(len(blob)))
+        self.end_headers()
+        if body:
+            self.wfile.write(blob)
+
+    # ---- the one gate on the filesystem ---------------------------------------
+    # Every filesystem answer this server gives passes through send_head:
+    # SimpleHTTPRequestHandler routes both GET and HEAD through it, and a verb
+    # added later would too. Guarding do_GET was the first shape of this fix and
+    # it was wrong in a way that is worth writing down, because it is the same
+    # shape as every other bug in this file's history — a check that passes for
+    # the wrong reason. do_HEAD is its own method on the base class, so it never
+    # ran the do_GET allowlist at all: HEAD / answered 200 with a
+    # Content-Length of 1092 for the directory listing, and HEAD on
+    # /.git/config, /handoffs/, /observatory.py and /induction.py answered 200
+    # with each file's exact size. No body, so nothing was readable — but
+    # existence and size are still more than a port serving one page has any
+    # business saying, and "GET returns 404" had been read as "unreachable".
+    #
+    # The gate therefore sits at the shared resolution rather than at each
+    # verb. The rule to keep: guard where the path becomes a file, never where
+    # a method becomes a response.
+    def send_head(self):  # noqa: N802 — stdlib name
+        path = self.path.split("?")[0]
+        # The install holds the whole git checkout — .git/config, the handoffs,
+        # the source of this file. None of it has ever been something the page
+        # asks for, and on this machine the plugin directory is a symlink to a
+        # working tree, so serving it reached harvested agent sessions rather
+        # than just a public clone.
         if path in ("/", "/index.html"):
             self.send_response(302)
             self.send_header("Location", "/app/swarm.html")
+            self.send_header("Content-Length", "0")
             self.end_headers()
-            return
+            return None
         if not path.startswith("/app/") or ".." in path:
             self.send_error(404)
-            return
-        super().do_GET()
+            return None
+        return super().send_head()
 
     # ---- writes ---------------------------------------------------------------
     # Every one of these carries the same custom-header requirement the
