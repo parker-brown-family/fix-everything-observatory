@@ -124,9 +124,20 @@
     display:flex;align-items:center;gap:14px;padding:9px 18px;
     background:var(--bg2);border-top:1px solid var(--line);
   }
-  #scrub{flex:1;accent-color:var(--cyan);height:3px}
-  #clock{font-size:11px;color:var(--fg);min-width:172px;text-align:right;white-space:nowrap}
+  /* the footer is a transport bar: jump / play / jump, rate, readout, progress */
+  .tbtn{width:34px;padding:5px 0 6px;text-align:center;font-size:12px;flex:none}
+  .tbtn.wide{width:46px;font-size:10.5px}
+  #playBtn{color:var(--white)}
+  #scrub{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;cursor:pointer;
+    background:linear-gradient(to right,var(--cyan) var(--p,100%),var(--dim) var(--p,100%))}
+  #scrub::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:11px;height:11px;
+    border-radius:50%;background:var(--white);border:1.5px solid var(--cyan)}
+  #scrub::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:var(--white);border:1.5px solid var(--cyan)}
+  #clock{font-size:11px;color:var(--fg);min-width:240px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  #clock b{color:var(--white);letter-spacing:.08em;font-weight:700}
   .legend{font-size:9.5px;color:var(--ghost);white-space:nowrap;min-width:0;overflow:hidden}
+  #legendChip{position:absolute;right:12px;top:10px;z-index:3;
+    background:rgba(22,22,30,.7);border:1px solid var(--line);padding:5px 10px 6px}
   .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
   .sw.hatch{background:repeating-linear-gradient(45deg,transparent 0 2px,var(--dim) 2px 4px);border:1px solid var(--dim)}
 
@@ -191,24 +202,27 @@
     <canvas id="world"></canvas>
     <div id="feed"></div>
     <div id="hint">hover a mote · click one for its story · space replays history · drag the flow to scrub</div>
+    <div id="legendChip" class="legend">
+      <span class="sw" style="background:var(--cyan)"></span>marker
+      <span class="sw" style="background:var(--violet)"></span>agent smell
+      <span class="sw" style="background:var(--yellow)"></span>hint
+      <span class="sw" style="background:var(--ghost)"></span>no signal
+      <span class="sw" style="background:var(--red)"></span>reopened
+      <span class="sw" style="background:var(--green)"></span>merged
+      <span class="sw hatch"></span>nobody looked
+    </div>
     <div id="overlay"></div>
   </div>
   <aside id="rail">loading…</aside>
 </main>
 <footer>
-  <button id="playBtn" title="[space] replay history">▶ REPLAY</button>
-  <button id="speedBtn" title="[+/-] swarm motion speed">MOTION 0.5×</button>
-  <input id="scrub" type="range" min="0" max="1000" value="1000">
+  <button id="toStart" class="tbtn" title="[Home] to the beginning">⏮</button>
+  <button id="playBtn" class="tbtn" title="[space] play / pause">▶</button>
+  <button id="toEnd" class="tbtn" title="[End] to now">⏭</button>
+  <button id="rateBtn" class="tbtn wide" title="[&lt; &gt;] playback speed">1×</button>
   <div id="clock">—</div>
-  <div class="legend">
-    <span class="sw" style="background:var(--cyan)"></span>marker
-    <span class="sw" style="background:var(--violet)"></span>agent smell
-    <span class="sw" style="background:var(--yellow)"></span>hint
-    <span class="sw" style="background:var(--ghost)"></span>no signal
-    <span class="sw" style="background:var(--red)"></span>reopened
-    <span class="sw" style="background:var(--green)"></span>merged
-    <span class="sw hatch"></span>nobody looked
-  </div>
+  <input id="scrub" type="range" min="0" max="1000" value="1000">
+  <button id="speedBtn" title="[+/-] swarm motion speed">MOTION 0.5×</button>
 </footer>
 <div id="tip"></div>
 <script>
@@ -222,6 +236,7 @@ const COL={bg:C('bg'),bg2:C('bg2'),panel:C('panel'),line:C('line'),dim:C('dim'),
   fg:C('fg'),blue:C('blue'),cyan:C('cyan'),green:C('green'),red:C('red'),
   yellow:C('yellow'),violet:C('violet'),white:C('white')};
 const DAY=864e5, WK=7*DAY;
+const DOW=['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
 function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function fmtDur(ms){if(ms==null||!isFinite(ms))return '—';const h=ms/36e5;if(h<1)return Math.round(ms/6e4)+'m';if(h<48)return h.toFixed(1)+'h';return (h/24).toFixed(1)+'d'}
 function fmtRel(ms){return fmtDur(ms)+' ago'}
@@ -240,6 +255,10 @@ let T=0, playing=false, dragStrip=false, sel=null;
    it crosses the whole history in REPLAY_SECONDS of wall clock however fast the
    swarm happens to be turning. */
 const SPEEDS=[0.1,0.25,0.5,1,2,4]; let speedI=2, lastTs=0, anim=0;
+/* Playback rate scales the replay ramp only — 1× crosses the whole history in
+   REPLAY_SECONDS. The MOTION knob above scales the swarm's own animation only.
+   Two knobs, two clocks, deliberately never one. */
+const RATES=[0.25,0.5,1,2,4]; let rateI=2, lastClockHtml='';
 const REPLAY_SECONDS=60;  // wall-clock seconds for the replay cursor to cross the history
 let hover=null, mouse={x:-1,y:-1,px:0,py:0};
 let hits=[], AGG=null, pings=[], G=null;
@@ -719,6 +738,11 @@ function spawnFx(kind,a,zone,col,big){
 function spawnCrossings(d,zone){
   if(lastCrossT===null||T===lastCrossT){lastCrossT=T;return}
   const lo=Math.min(lastCrossT,T),hi=Math.max(lastCrossT,T);lastCrossT=T;
+  // A jump is not playback. Restarting from the end, or clicking to the start,
+  // crosses the whole history in one frame — and at t0 every artifact's orbit
+  // radius is zero, so the sampled burst piled 380 rings onto the hive as one
+  // white blob. Teleports spawn nothing; sparks are for events you watch happen.
+  if(hi-lo>60*DAY)return;
   if(fx.length>400)return;                    // a storm is already on screen
   const births=[],deaths=[];
   for(const a of d.artifacts){
@@ -764,11 +788,14 @@ function draw(ts){
   const d=cur();hits=[];
   if(d&&AGG){
     if(playing){
-      T+=(d.t1-d.t0)*(dt/1000)/REPLAY_SECONDS;
-      if(T>=d.t1){T=d.t1;setPlaying(false)}
-      $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));}
+      T+=(d.t1-d.t0)*(dt/1000)/REPLAY_SECONDS*RATES[rateI];
+      if(T>=d.t1){T=d.t1;setPlaying(false)}}
     T=Math.min(d.t1,Math.max(d.t0,T));
-    $('#clock').textContent=(T>=d.t1-1500?'NOW · ':'')+fmtDate(T);
+    const sv=Math.round(1000*(T-d.t0)/(d.t1-d.t0)),se=$('#scrub');
+    if(+se.value!==sv){se.value=sv;se.style.setProperty('--p',(sv/10)+'%')}
+    const spanDays=Math.max(1,Math.ceil((d.t1-d.t0)/DAY));
+    const ch=`<b>${T>=d.t1-1500?'NOW':DOW[new Date(T).getUTCDay()]}</b> · ${fmtDate(T).slice(5)} · day ${Math.min(spanDays,1+Math.floor((T-d.t0)/DAY))}/${spanDays}`;
+    if(ch!==lastClockHtml){lastClockHtml=ch;$('#clock').innerHTML=ch}
 
     const rows=visible();
     const fog=(!d.coverage.complete&&!SIM)?86:0;
@@ -966,7 +993,7 @@ function draw(ts){
 }
 
 /* ================= controls ================= */
-function setPlaying(v){playing=v;$('#playBtn').textContent=v?'⏸ PAUSE':'▶ REPLAY'}
+function setPlaying(v){playing=v;$('#playBtn').textContent=v?'⏸':'▶'}
 function setSim(v){
   SIM=v;
   fx=[];lastCrossT=null;
@@ -979,6 +1006,10 @@ function setSim(v){
 function dismissHint(){if(!hintGone){hintGone=true;const h=$('#hint');h.style.opacity='0';setTimeout(()=>h.remove(),1300)}}
 function setSpeed(i){speedI=Math.max(0,Math.min(SPEEDS.length-1,i));$('#speedBtn').textContent='MOTION '+SPEEDS[speedI]+'×'}
 $('#speedBtn').onclick=()=>setSpeed(speedI+1<SPEEDS.length?speedI+1:0);
+function setRate(i){rateI=Math.max(0,Math.min(RATES.length-1,i));$('#rateBtn').textContent=RATES[rateI]+'×'}
+$('#rateBtn').onclick=()=>setRate(rateI+1<RATES.length?rateI+1:0);
+$('#toStart').onclick=()=>{const d=cur();if(!d)return;dismissHint();T=d.t0;lastFeedKey=''};
+$('#toEnd').onclick=()=>{const d=cur();if(!d)return;dismissHint();setPlaying(false);T=d.t1};
 $('#modeBtn').onclick=()=>{setSim(!SIM)};
 $('#scopeBtn').onclick=()=>{SCOPEI=(SCOPEI+1)%SCOPES.length;$('#scopeBtn').textContent=SCOPES[SCOPEI][1];lastFeedKey='';refresh()};
 $('#playBtn').onclick=()=>{
@@ -1017,6 +1048,10 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='s')$('#scopeBtn').click();
   else if(e.key==='+'||e.key==='=')setSpeed(speedI+1);
   else if(e.key==='-'||e.key==='_')setSpeed(speedI-1);
+  else if(e.key==='.'||e.key==='>')setRate(rateI+1);
+  else if(e.key===','||e.key==='<')setRate(rateI-1);
+  else if(e.key==='Home'){e.preventDefault();$('#toStart').click()}
+  else if(e.key==='End'){e.preventDefault();$('#toEnd').click()}
   else if(e.key==='Escape'&&sel){sel=null;renderRail()}
   else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     const d=cur();if(!d)return;setPlaying(false);
