@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import functools
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+import induction
 
 ROOT = Path(__file__).resolve().parent
 
@@ -57,8 +60,13 @@ def _state_dir() -> Path:
     return Path(base).expanduser().resolve() / "fix-everything-observatory"
 
 
-DATA = _state_dir()
-CACHE_PATH = DATA / "http-cache.json"
+STATE = _state_dir()
+# One observatory, many repositories. Each project's mined history lives under
+# its own slug beneath projects/, and the registry beside them is the list of
+# what this instrument watches — the thing the bar glyph's search widget reads
+# and the induction panel writes.
+PROJECTS_DIR = STATE / "projects"
+REGISTRY_PATH = STATE / "projects.json"
 # Where it used to live, and still does for anyone upgrading in place.
 LEGACY_DATA = ROOT / "data"
 # A fresh clone has no manifest, and building one is ~590 conditional round trips
@@ -70,17 +78,33 @@ LEGACY_DATA = ROOT / "data"
 SEED_DIR = ROOT / "seed"
 SEED_JS_GZ = SEED_DIR / "manifest.js.gz"
 SEED_META = SEED_DIR / "manifest.meta.json"
-REPO = os.environ.get("FIX_OBSERVATORY_REPO", "omacom/omarchy")
+DEFAULT_REPO = os.environ.get("FIX_OBSERVATORY_REPO", "omacom/omarchy")
 PORT = int(os.environ.get("FIX_OBSERVATORY_PORT", "4517"))
+# The fallback token. A project cloned locally resolves its OWN token from its
+# own directory (this machine routes gh through a per-repository account
+# wrapper, so the same command in two directories honestly returns two
+# different tokens); this one is what a project with no local clone gets, and
+# what everything falls back to when gh cannot answer.
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 # Authenticated we get 5,000 requests an hour, which is enough to walk every
 # stream to its end (~600 pages for omarchy) — so we do, and order ascending
 # because then the cursors and the ETags of everything but the last page are
 # stable and later cycles cost nothing. Unauthenticated, 60/hour makes that
 # impossible; we take the NEWEST pages instead and record the truncation.
-COMPLETE = bool(TOKEN)
-ORDER = "asc" if COMPLETE else "desc"
-MAX_PAGES = int(os.environ.get("FIX_OBSERVATORY_MAX_PAGES", "1500" if TOKEN else "3"))
+# Per project, because the token is per project: a repository with a local
+# clone resolves its own, and two projects on one machine can legitimately be
+# reachable by different accounts.
+MAX_PAGES_ENV = os.environ.get("FIX_OBSERVATORY_MAX_PAGES")
+
+
+def page_cap(token) -> int:
+    if MAX_PAGES_ENV:
+        return int(MAX_PAGES_ENV)
+    return 1500 if token else 3
+
+
+def order_for(token) -> str:
+    return "asc" if token else "desc"
 # Every comment ships as a tick so the event lane is honest across the whole
 # span; only the newest carry their text, because 20k snippets is ~7MB the
 # browser would re-parse on every load.
@@ -180,8 +204,13 @@ def log(msg: str) -> None:
 
 
 # ---- conditional HTTP with a tiny on-disk cache -----------------------------
-_cache: dict = {}
+# The rate budget is genuinely global — it belongs to a token, not to a
+# project — so it stays a module global while everything else moved onto the
+# project. Keyed by token fingerprint, because two projects reachable by two
+# different accounts have two independent budgets, and sharing one number
+# between them would make each one lie about the other's headroom.
 RATE: dict = {}
+RATE_BY_KEY: dict = {}
 
 
 # Cached bodies are DISTILLED rows, not GitHub's. Raw, the ~600 pages of a whole
@@ -190,21 +219,213 @@ RATE: dict = {}
 CACHE_VERSION = 2
 
 
-def load_cache() -> None:
-    global _cache
-    try:
-        blob = json.loads(CACHE_PATH.read_text())
-        _cache = blob["entries"] if blob.get("v") == CACHE_VERSION else {}
-    except Exception:
-        _cache = {}
+# ---- a project ---------------------------------------------------------------
+class Project:
+    """One repository this observatory watches, and everything it owns.
+
+    Everything that used to be a module global — the repo slug, the state
+    directory, the HTTP cache, the token, the page cap — hangs off one of
+    these, because the instrument now watches more than one thing at a time
+    and each of those answers differently per repository. The token especially:
+    this machine routes `gh` through a wrapper that picks the account from the
+    repository being acted on, so a project with a local clone resolves its own
+    and two projects can honestly be reachable by two different accounts.
+    """
+
+    def __init__(self, slug: str, repo: str, path: str | None = None,
+                 label: str | None = None, builtin: bool = False,
+                 added_at: str | None = None):
+        self.slug = slug
+        self.repo = repo               # owner/name
+        self.path = path               # the local clone, if there is one
+        self.label = label or repo
+        self.builtin = builtin
+        self.added_at = added_at
+        self.cache: dict = {}
+        self.cache_loaded = False
+        self._token: str | None = None
+        self._token_source: str = "not looked for"
+        self._token_at: float = 0.0
+        self.last_error: str | None = None
+        self.mining = False
+
+    # -- where its things live
+    @property
+    def dir(self) -> Path:
+        return PROJECTS_DIR / self.slug
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.dir / "manifest.json"
+
+    @property
+    def manifest_js(self) -> Path:
+        return self.dir / "manifest.js"
+
+    @property
+    def cache_path(self) -> Path:
+        return self.dir / "http-cache.json"
+
+    # -- the token, resolved where the repository actually is
+    def token(self) -> str:
+        """This project's token, re-resolved at most once an hour.
+
+        A local clone is asked first and the environment second, which is the
+        opposite of the obvious order and is the whole point: the launcher
+        exports one token borrowed from `gh` in the plugin's own directory, and
+        preferring it would hand every project the account that happened to own
+        the directory the server started in.
+        """
+        now = time.time()
+        if self._token is not None and now - self._token_at < 3600:
+            return self._token
+        tok, source = None, "not looked for"
+        if self.path and Path(self.path).is_dir():
+            tok, source = induction.gh_token_for(self.path)
+        if not tok and TOKEN:
+            tok, source = TOKEN, "environment (GITHUB_TOKEN/GH_TOKEN)"
+        self._token, self._token_source = tok or "", source
+        self._token_at = now
+        return self._token
+
+    @property
+    def token_source(self) -> str:
+        return self._token_source
+
+    # -- the cache
+    def load_cache(self) -> None:
+        if self.cache_loaded:
+            return
+        self.cache_loaded = True
+        try:
+            blob = json.loads(self.cache_path.read_text())
+            self.cache = blob["entries"] if blob.get("v") == CACHE_VERSION else {}
+        except Exception:
+            self.cache = {}
+
+    def save_cache(self) -> None:
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            self.cache_path.write_text(
+                json.dumps({"v": CACHE_VERSION, "entries": self.cache}))
+        except Exception as exc:
+            log(f"[{self.slug}] cache save failed: {exc}")
+
+    # -- what the page and the bar widget need to know about it
+    def summary(self) -> dict:
+        """Never invents a number it did not read.
+
+        A project whose manifest has not landed yet reports null artifacts, not
+        zero: "we have not mined this" and "this repository is empty" are
+        different facts, and the search widget draws them differently.
+        """
+        out = {
+            "slug": self.slug, "repo": self.repo, "label": self.label,
+            "path": self.path, "builtin": self.builtin,
+            "added_at": self.added_at, "mining": self.mining,
+            "error": self.last_error,
+            "artifacts": None, "comments": None, "events": None,
+            "fetched_at": None, "complete": None, "authenticated": None,
+            "seeded": False,
+        }
+        try:
+            m = json.loads(self.manifest_path.read_text())
+        except Exception:
+            sm = seed_meta() if self.slug == default_slug() else None
+            if sm:
+                out.update(artifacts=sm.get("artifacts"),
+                           comments=sm.get("comments"),
+                           events=sm.get("events"),
+                           fetched_at=sm.get("fetched_at"),
+                           complete=sm.get("complete"), seeded=True)
+            return out
+        cov = m.get("coverage") or {}
+        out.update(artifacts=len(m.get("artifacts") or []),
+                   comments=len(m.get("comments") or []),
+                   events=len(m.get("events") or []),
+                   fetched_at=m.get("fetched_at"),
+                   complete=cov.get("complete"),
+                   authenticated=cov.get("authenticated"))
+        return out
 
 
-def save_cache() -> None:
-    try:
-        DATA.mkdir(parents=True, exist_ok=True)
-        CACHE_PATH.write_text(json.dumps({"v": CACHE_VERSION, "entries": _cache}))
-    except Exception as exc:
-        log(f"cache save failed: {exc}")
+# ---- the registry ------------------------------------------------------------
+# Everything the observatory watches, plus the roots it looks in for more. Held
+# in memory behind one lock and written through on every change: two browser
+# tabs and a bar widget all poke at this, and a half-written registry is a
+# search widget that shows nothing with no error to explain it.
+REGISTRY_LOCK = threading.RLock()
+REGISTRY: dict = {"version": 1, "roots": [], "active": None, "projects": {}}
+PROJECTS: dict[str, Project] = {}
+# Slugs waiting for their first mine, drained ahead of the schedule so an
+# induction produces a swarm now rather than at the top of the next cycle.
+MINE_QUEUE: list[str] = []
+
+
+def default_slug() -> str:
+    owner, _, name = DEFAULT_REPO.partition("/")
+    return induction.slug_for(owner, name or DEFAULT_REPO)
+
+
+def load_registry() -> None:
+    global REGISTRY
+    with REGISTRY_LOCK:
+        try:
+            blob = json.loads(REGISTRY_PATH.read_text())
+        except Exception:
+            blob = {}
+        REGISTRY = {
+            "version": 1,
+            "roots": blob.get("roots") or induction.default_roots(),
+            "active": blob.get("active"),
+            "projects": blob.get("projects") or {},
+        }
+        # The repository this program was built to watch is always present and
+        # cannot be forgotten. It is what the committed seed is a picture of,
+        # and an observatory whose list can be emptied to nothing is an
+        # observatory that opens on an empty screen with no way back.
+        ds = default_slug()
+        REGISTRY["projects"].setdefault(ds, {
+            "repo": DEFAULT_REPO, "path": None, "label": DEFAULT_REPO,
+            "builtin": True, "added_at": None,
+        })
+        REGISTRY["projects"][ds]["builtin"] = True
+        if REGISTRY["active"] not in REGISTRY["projects"]:
+            REGISTRY["active"] = ds
+        PROJECTS.clear()
+        for slug, rec in REGISTRY["projects"].items():
+            PROJECTS[slug] = Project(
+                slug, rec.get("repo") or "", rec.get("path"),
+                rec.get("label"), bool(rec.get("builtin")), rec.get("added_at"))
+
+
+def save_registry() -> None:
+    with REGISTRY_LOCK:
+        try:
+            STATE.mkdir(parents=True, exist_ok=True)
+            tmp = REGISTRY_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(REGISTRY, indent=1) + "\n")
+            tmp.replace(REGISTRY_PATH)
+        except Exception as exc:
+            log(f"registry save failed: {exc}")
+
+
+def project(slug: str | None) -> Project:
+    """The named project, or the active one. Never None.
+
+    An unknown slug resolves to the active project rather than raising: it
+    arrives from a URL a person can edit and a bar widget that may be a version
+    behind, and answering with the instrument's current subject beats a stack
+    trace in a script tag.
+    """
+    with REGISTRY_LOCK:
+        if slug and slug in PROJECTS:
+            return PROJECTS[slug]
+        active = REGISTRY.get("active") or default_slug()
+        if active not in PROJECTS:
+            load_registry()
+            active = REGISTRY.get("active") or default_slug()
+        return PROJECTS[active]
 
 
 def adopt_legacy_data() -> None:
@@ -229,23 +450,69 @@ def adopt_legacy_data() -> None:
     # Guarded on the manifest, not on the directory: the launcher creates the
     # state directory before this ever runs, so "does it exist" is always true
     # and would skip every migration there is.
-    if (DATA / "manifest.json").exists() or not LEGACY_DATA.is_dir():
+    dest = PROJECTS.get(default_slug())
+    if dest is None:
+        return
+    if dest.manifest_path.exists() or not LEGACY_DATA.is_dir():
         return
     if not (LEGACY_DATA / "manifest.json").is_file():
         return
     carried = 0
     try:
-        DATA.mkdir(parents=True, exist_ok=True)
+        dest.dir.mkdir(parents=True, exist_ok=True)
         for src in sorted(LEGACY_DATA.iterdir()):
-            if src.is_file() and not (DATA / src.name).exists():
-                shutil.copy2(src, DATA / src.name)
+            if not src.is_file() or src.suffix == ".log":
+                continue        # logs describe a past run, not a history
+            if not (dest.dir / src.name).exists():
+                shutil.copy2(src, dest.dir / src.name)
                 carried += 1
     except Exception as exc:
-        log(f"could not carry the mined history across to {DATA}: {exc}")
+        log(f"could not carry the mined history across to {dest.dir}: {exc}")
         return
     if carried:
         log(f"carried {carried} file(s) of mined history from {LEGACY_DATA} "
-            f"to {DATA} — the old copy is left where it is")
+            f"to {dest.dir} — the old copy is left where it is")
+
+
+def adopt_flat_state() -> None:
+    """Carry a pre-0.3 single-project state directory into projects/<slug>/.
+
+    Until the observatory could watch more than one repository, everything the
+    miner wrote sat directly in the state directory: one manifest, one cache,
+    one set of agent prompts. Now that a slug owns each of those, the flat copy
+    has to move under the slug the built-in repository resolves to, or the
+    first start after an upgrade shows an empty instrument and quietly begins
+    a thirteen-minute re-mine of history that is already on the disk.
+
+    Copies rather than moves, and only into a project directory that does not
+    yet exist. Another observatory process may still be reading the flat files
+    (this machine routinely has several), and the cost of leaving them is disk
+    the user can delete, while the cost of moving them out from under a running
+    server is an instrument that goes blank mid-session.
+    """
+    dest = PROJECTS.get(default_slug())
+    if dest is None or dest.manifest_path.exists():
+        return
+    if not (STATE / "manifest.json").is_file():
+        return
+    carried = 0
+    try:
+        dest.dir.mkdir(parents=True, exist_ok=True)
+        for src in sorted(STATE.iterdir()):
+            if not src.is_file():
+                continue
+            if src.name == "projects.json" or src.suffix == ".log":
+                continue
+            if not (dest.dir / src.name).exists():
+                shutil.copy2(src, dest.dir / src.name)
+                carried += 1
+    except Exception as exc:
+        log(f"could not carry the flat state into {dest.dir}: {exc}")
+        return
+    if carried:
+        log(f"carried {carried} file(s) from the single-project layout into "
+            f"{dest.dir} — the flat copy is left where it is, and can be "
+            f"deleted once this release has settled")
 
 
 # ---- the committed seed ------------------------------------------------------
@@ -261,7 +528,7 @@ def seed_meta() -> dict | None:
         meta = json.loads(SEED_META.read_text())
     except Exception:
         return None
-    if not SEED_JS_GZ.exists() or meta.get("repo") != REPO:
+    if not SEED_JS_GZ.exists() or meta.get("repo") != DEFAULT_REPO:
         return None
     return meta
 
@@ -278,7 +545,7 @@ def write_seed() -> str:
         raise SystemExit(
             f"--seed freezes a new seed into {SEED_DIR}, and this copy is "
             f"installed read-only. Run it in a working tree.")
-    manifest = json.loads((DATA / "manifest.json").read_text())
+    manifest = json.loads(PROJECTS[default_slug()].manifest_path.read_text())
     manifest["seed"] = True
     cov = manifest.get("coverage") or {}
     SEED_DIR.mkdir(exist_ok=True)
@@ -303,20 +570,39 @@ def write_seed() -> str:
             f"{meta['bytes'] / 1048576:.1f}MB gzipped → {SEED_JS_GZ}")
 
 
-def _note_rate(headers) -> None:
-    global RATE
+def budget_key(token) -> str:
+    """Which budget a token spends from.
+
+    A fingerprint rather than the token, so a rate table that ends up in a log
+    line or a debugger never carries a credential. The empty string is the
+    unauthenticated budget, which is per-IP and therefore genuinely shared.
+    """
+    if not token:
+        return "anonymous"
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
+
+
+def _note_rate(headers, key: str = "anonymous") -> None:
     rem, lim, res = (headers.get("X-RateLimit-Remaining"),
                      headers.get("X-RateLimit-Limit"),
                      headers.get("X-RateLimit-Reset"))
     if rem is not None:
-        RATE = {"remaining": int(rem), "limit": int(lim or 0),
-                "reset": int(res or 0)}
+        entry = {"remaining": int(rem), "limit": int(lim or 0),
+                 "reset": int(res or 0)}
+        RATE_BY_KEY[key] = entry
+        # RATE stays as the most recently observed budget so the log line and
+        # the manifest's coverage block keep reading as they did. Which budget
+        # it is is recorded alongside, because on a machine with two accounts
+        # "1,482 remaining" without saying whose is not a fact anyone can use.
+        RATE.clear()
+        RATE.update(entry)
+        RATE["key"] = key
 
 
 LINK_NEXT_RE = re.compile(r'<https://api\.github\.com([^>]+)>;\s*rel="next"')
 
 
-def api_page(path: str, row_fn=None):
+def api_page(path: str, row_fn=None, proj: "Project | None" = None):
     """Conditional GET; returns (body, next_path or None). 304 serves the cache.
 
     The next page comes from the server's own Link header, not from an
@@ -326,51 +612,58 @@ def api_page(path: str, row_fn=None):
     `row_fn` distils each row before it is cached — a row that returns None is
     dropped. Nothing downstream ever sees GitHub's full objects, which is what
     keeps a whole-repo cache in megabytes rather than hundreds of them.
+
+    The cache and the token both come off the project, so two repositories
+    reachable by two different accounts never share either.
     """
+    proj = proj or project(None)
+    token = proj.token()
     headers = {
         "User-Agent": "fix-everything-observatory/2.0 (+https://wecanfixeverything.com)",
         "Accept": "application/vnd.github+json",
     }
-    if TOKEN:
-        headers["Authorization"] = "Bearer " + TOKEN
-    ent = _cache.get(path)
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    key = budget_key(token)
+    ent = proj.cache.get(path)
     if ent and ent.get("etag"):
         headers["If-None-Match"] = ent["etag"]
     try:
         with urlopen(Request("https://api.github.com" + path, headers=headers),
                      timeout=30) as res:
-            _note_rate(res.headers)
+            _note_rate(res.headers, key)
             raw = json.load(res)
             body = raw if row_fn is None else [
                 x for x in (row_fn(r) for r in raw) if x is not None]
             m = LINK_NEXT_RE.search(res.headers.get("Link") or "")
             nxt = m.group(1) if m else None
-            _cache[path] = {"etag": res.headers.get("ETag"), "body": body,
-                            "next": nxt}
+            proj.cache[path] = {"etag": res.headers.get("ETag"), "body": body,
+                                "next": nxt}
             return body, nxt
     except HTTPError as e:
         if e.code == 304 and ent:
-            _note_rate(e.headers)
+            _note_rate(e.headers, key)
             m = LINK_NEXT_RE.search(e.headers.get("Link") or "")
             return ent["body"], (m.group(1) if m else ent.get("next"))
         raise
 
 
-def api(path: str):
+def api(path: str, proj: "Project | None" = None):
     """One object, no pagination."""
-    return api_page(path)[0]
+    return api_page(path, None, proj)[0]
 
 
-def budget_low() -> bool:
-    if not RATE:
+def budget_low(key: str = "anonymous") -> bool:
+    rate = RATE_BY_KEY.get(key)
+    if not rate:
         return False
-    if RATE.get("remaining", 999) >= MIN_BUDGET:
+    if rate.get("remaining", 999) >= MIN_BUDGET:
         return False
-    return RATE.get("reset", 0) > time.time()
+    return rate.get("reset", 0) > time.time()
 
 
 # ---- mining ------------------------------------------------------------------
-def fetch_all(path: str, row_fn=None, cap: int = MAX_PAGES):
+def fetch_all(path: str, row_fn=None, cap: int = 1500, proj: "Project | None" = None):
     """Walk a list endpoint to its end, or until `cap` pages / the rate budget.
 
     Returns (rows, complete, err, pages). `complete` is true ONLY when the
@@ -482,21 +775,30 @@ def event_row(e):
     }
 
 
-def mine_once() -> None:
-    if budget_low():
-        reset = datetime.fromtimestamp(RATE.get("reset", 0), timezone.utc)
-        log(f"rate budget low ({RATE.get('remaining')}) — cycle skipped, "
-            f"resets {reset.isoformat(timespec='minutes')}")
+def mine_once(proj: "Project | None" = None) -> None:
+    proj = proj or project(None)
+    proj.load_cache()
+    token = proj.token()
+    key = budget_key(token)
+    cap = page_cap(token)
+    order = order_for(token)
+    REPO = proj.repo
+
+    if budget_low(key):
+        rate = RATE_BY_KEY.get(key, {})
+        reset = datetime.fromtimestamp(rate.get("reset", 0), timezone.utc)
+        log(f"[{proj.slug}] rate budget low ({rate.get('remaining')}) — cycle "
+            f"skipped, resets {reset.isoformat(timespec='minutes')}")
         return
 
     arts, issues_complete, err, issue_pages = fetch_all(
-        f"/repos/{REPO}/issues?state=all&sort=created&direction={ORDER}"
-        "&per_page=100", issue_row)
+        f"/repos/{REPO}/issues?state=all&sort=created&direction={order}"
+        "&per_page=100", issue_row, cap, proj)
     comments, comments_complete, c_err, comment_pages = fetch_all(
-        f"/repos/{REPO}/issues/comments?sort=created&direction={ORDER}"
-        "&per_page=100", comment_row)
+        f"/repos/{REPO}/issues/comments?sort=created&direction={order}"
+        "&per_page=100", comment_row, cap, proj)
     events, events_complete, e_err, event_pages = fetch_all(
-        f"/repos/{REPO}/issues/events?per_page=100", event_row)
+        f"/repos/{REPO}/issues/events?per_page=100", event_row, cap, proj)
     err = err or c_err or e_err
     arts = [a for a in arts if a["number"] is not None]
     events_capped = event_pages >= EVENT_PAGE_CAP
@@ -505,9 +807,10 @@ def mine_once() -> None:
 
     meta = None
     try:
-        meta = api(f"/repos/{REPO}")
+        meta = api(f"/repos/{REPO}", proj)
     except (HTTPError, URLError, OSError) as exc:
         err = err or f"repo meta: {exc}"
+    proj.last_error = err
 
     comments.sort(key=lambda c: c["created_at"] or "")
     snippets_from = comments[0]["created_at"] if comments else None
@@ -519,17 +822,29 @@ def mine_once() -> None:
 
     events.sort(key=lambda e: e["created_at"] or "")
 
-    manifest_path = DATA / "manifest.json"
+    manifest_path = proj.manifest_path
+    # The seed is a picture of ONE repository — the one this program was built
+    # to watch. An inducted project has no seed of its own, so the two guards
+    # below that fall back to it must not fire for anybody else, or a newly
+    # inducted repository would be protected from its own first mine by a
+    # manifest of somebody else's history.
+    seed = seed_meta() if proj.slug == default_slug() else None
     # A cycle that fetched NOTHING is a failed cycle, not a small slice, and the
     # log has to say which. Before the seed existed this branch could only fire
     # against a manifest on disk, so a failed first cycle fell through to the
     # slice guard below and was reported as "a slice (0 artifacts)" — which reads
     # as a measurement rather than as an error with a cause. Same rule as the
     # manifest itself: 300 of 8,892 and nothing at all are different findings.
-    if not arts and err and (manifest_path.exists() or seed_meta()):
+    if not arts and err and (manifest_path.exists() or seed):
         held = "previous manifest" if manifest_path.exists() else "committed seed"
-        log(f"mine failed ({err}) — keeping the {held}")
-        save_cache()
+        log(f"[{proj.slug}] mine failed ({err}) — keeping the {held}")
+        proj.save_cache()
+        return
+    if not arts and err:
+        log(f"[{proj.slug}] mine failed ({err}) — nothing on disk to keep, and "
+            f"nothing written. This project has no picture yet, which is not "
+            f"the same as an empty repository.")
+        proj.save_cache()
         return
 
     # A slice must never overwrite a walk. An untokened cycle sees 300 of 8,876
@@ -544,10 +859,10 @@ def mine_once() -> None:
             prev = None
         if (prev and prev.get("repo") == REPO
                 and (prev.get("coverage") or {}).get("complete")):
-            log(f"this cycle is a slice ({len(arts)} artifacts) and the manifest "
-                f"on disk was walked to the end — keeping the complete one. "
-                f"A token is what raises the horizon.")
-            save_cache()
+            log(f"[{proj.slug}] this cycle is a slice ({len(arts)} artifacts) "
+                f"and the manifest on disk was walked to the end — keeping the "
+                f"complete one. A token is what raises the horizon.")
+            proj.save_cache()
             return
 
     # The same rule, against the committed seed. Without this, an untokened first
@@ -556,12 +871,11 @@ def mine_once() -> None:
     # Stale-and-whole beats fresh-and-truncated for an instrument about long arcs,
     # and the page dates the seed so nobody mistakes it for now.
     if not issues_complete and not manifest_path.exists():
-        sm = seed_meta()
-        if sm and sm.get("complete"):
-            log(f"this cycle is a slice ({len(arts)} artifacts) and the committed "
-                f"seed was walked to the end — serving the seed, writing nothing. "
-                f"A token is what raises the horizon.")
-            save_cache()
+        if seed and seed.get("complete"):
+            log(f"[{proj.slug}] this cycle is a slice ({len(arts)} artifacts) and "
+                f"the committed seed was walked to the end — serving the seed, "
+                f"writing nothing. A token is what raises the horizon.")
+            proj.save_cache()
             return
 
     opened = [a["opened_at"] for a in arts if a["opened_at"]]
@@ -571,8 +885,9 @@ def mine_once() -> None:
         "repo": REPO,
         "fetched_at": now_iso,
         "error": err,
+        "slug": proj.slug,
         "coverage": {
-            "per_page": 100, "order": ORDER,
+            "per_page": 100, "order": order,
             "issue_pages": issue_pages,
             "comment_pages": comment_pages,
             "event_pages": event_pages,
@@ -589,31 +904,34 @@ def mine_once() -> None:
             "oldest_event": events[0]["created_at"] if events else None,
             "repo_open_issues": meta.get("open_issues_count") if meta else None,
             "repo_created_at": meta.get("created_at") if meta else None,
-            "authenticated": bool(TOKEN),
-            "api": ({"remaining": RATE.get("remaining"),
-                     "limit": RATE.get("limit"),
+            "authenticated": bool(token),
+            "token_source": proj.token_source,
+            "api": ({"remaining": rate.get("remaining"),
+                     "limit": rate.get("limit"),
                      "reset_at": datetime.fromtimestamp(
-                         RATE["reset"], timezone.utc).isoformat(timespec="minutes")
-                     if RATE.get("reset") else None} if RATE else None),
+                         rate["reset"], timezone.utc).isoformat(timespec="minutes")
+                     if rate.get("reset") else None}
+                    if (rate := RATE_BY_KEY.get(key)) else None),
         },
         "artifacts": arts,
         "comments": comments,
         "events": events,
     }
 
-    DATA.mkdir(parents=True, exist_ok=True)
+    proj.dir.mkdir(parents=True, exist_ok=True)
     body = json.dumps(manifest, indent=1)
     manifest_path.write_text(body + "\n")
-    (DATA / "manifest.js").write_text("window.SWARM_DATA = " + body + ";\n")
-    save_cache()
+    proj.manifest_js.write_text("window.SWARM_DATA = " + body + ";\n")
+    proj.save_cache()
     counts = {}
     for a in arts:
         counts[a["attribution"]] = counts.get(a["attribution"], 0) + 1
-    log(f"mined {len(arts)} artifacts {counts} "
+    log(f"[{proj.slug}] mined {len(arts)} artifacts {counts} "
         f"comments={len(comments)} events={len(events)} "
         f"pages={issue_pages}/{comment_pages}/{event_pages} "
         f"complete={issues_complete}/{comments_complete}/{events_complete} "
-        f"api_remaining={RATE.get('remaining', '?')} err={err}")
+        f"api_remaining={(RATE_BY_KEY.get(key) or {}).get('remaining', '?')} "
+        f"err={err}")
 
 
 # ---- agent allocation ----------------------------------------------------------
@@ -679,11 +997,12 @@ PR_JOB = [
 ]
 
 
-def report_path(number) -> Path:
-    return DATA / f"agent-report-{number}.md"
+def report_path(proj: "Project", number) -> Path:
+    return proj.dir / f"agent-report-{number}.md"
 
 
-def agent_prompt(art, comments) -> str:
+def agent_prompt(proj: "Project", art, comments) -> str:
+    REPO = proj.repo
     kind = art.get("kind") or "issue"
     n = art.get("number")
     gh_verb = "pr" if kind == "pr" else "issue"
@@ -713,21 +1032,54 @@ def agent_prompt(art, comments) -> str:
         "Scrollback is not: this terminal is disposable and nobody will",
         "scroll it.",
         "",
-        f"  {report_path(n)}",
+        f"  {report_path(proj, n)}",
         "",
         "Say what you checked, what you could NOT check, and what you are",
         "only guessing. Unknown is not zero here either.",
         "",
-        "This machine is a LIVE OMARCHY INSTALL — the same system the ticket is",
-        "about. That makes it the honest reproduction surface and the hazard at",
-        "once. Read anything; run nothing that installs, overwrites, or updates",
-        "in order to test a theory. Prefer a copy under /tmp to touching",
-        "~/.config or ~/.local/share/omarchy, and never run omarchy-update.",
+    ] + _machine_paragraph(proj) + [
         "",
         "Do NOT post to GitHub or take any public action unless explicitly asked.",
         "",
     ]
     return "\n".join(lines)
+
+
+# The reproduction surface, which stopped being one fixed thing the moment the
+# observatory could be pointed at any repository on the machine. Three cases,
+# and getting them wrong in either direction costs something real: telling an
+# agent it is standing on a live install of the thing it is debugging, when it
+# is not, invites destructive "reproduction" of a system nobody has; NOT
+# telling it when it is true removes the one warning that keeps omarchy-update
+# from being run to test a theory.
+OMARCHY_MACHINE = [
+    "This machine is a LIVE OMARCHY INSTALL — the same system the ticket is",
+    "about. That makes it the honest reproduction surface and the hazard at",
+    "once. Read anything; run nothing that installs, overwrites, or updates",
+    "in order to test a theory. Prefer a copy under /tmp to touching",
+    "~/.config or ~/.local/share/omarchy, and never run omarchy-update.",
+]
+
+
+def _machine_paragraph(proj: "Project") -> list:
+    if proj.repo == DEFAULT_REPO and Path.home().joinpath(
+            ".local/share/omarchy").exists():
+        return OMARCHY_MACHINE
+    if proj.path and Path(proj.path).is_dir():
+        return [
+            f"The repository is checked out on this machine at {proj.path} —",
+            "read it, search it, run its tests. Treat the working tree as",
+            "someone else's: do not commit, push, stash, switch branches, or",
+            "run anything that rewrites it. If you need to build or mutate it,",
+            "clone it to /tmp first and say in the report that you did.",
+        ]
+    return [
+        "There is no local checkout of this repository on this machine, so the",
+        "code is reachable only through the API and a clone you make yourself.",
+        "Put any clone under /tmp. Say plainly in the report which claims you",
+        "verified against real code and which came from reading the thread —",
+        "they are different kinds of evidence and only one of them is strong.",
+    ]
 
 
 # What the terminal runs when we spawn `claude` ourselves. It holds the window
@@ -815,18 +1167,19 @@ def clean_agent_env():
     return {k: v for k, v in os.environ.items() if not k.startswith(drop)}
 
 
-def allocate_agent(number: int):
+def allocate_agent(proj: "Project", number: int):
     """Returns (error, warning). Either may be None; an error means no spawn."""
     try:
-        manifest = json.loads((DATA / "manifest.json").read_text())
+        manifest = json.loads(proj.manifest_path.read_text())
     except Exception as exc:
         return f"manifest unreadable: {exc}", None
     art = next((a for a in manifest.get("artifacts", [])
                 if a.get("number") == number), None)
     if art is None:
-        return f"#{number} is not in the manifest", None
-    pf = DATA / f"agent-prompt-{number}.md"
-    pf.write_text(agent_prompt(art, manifest.get("comments") or []))
+        return f"{proj.repo}#{number} is not in the manifest", None
+    proj.dir.mkdir(parents=True, exist_ok=True)
+    pf = proj.dir / f"agent-prompt-{number}.md"
+    pf.write_text(agent_prompt(proj, art, manifest.get("comments") or []))
     q = shlex.quote(str(pf))
     # A custom agent command is the operator's business — we preflight only the
     # `claude` we chose to run ourselves.
@@ -841,13 +1194,18 @@ def allocate_agent(number: int):
         if not ok:
             return note, None
         cmd = [term, "-e", "bash", "-lc", AGENT_SHELL.format(prompt=q)]
+    # The agent starts where the code is when we know where that is. An agent
+    # for a repository checked out on this machine that opens in $HOME has to
+    # find its own way there, and the one thing it should not have to guess is
+    # which of several similarly-named directories the ticket is about.
+    cwd = proj.path if (proj.path and Path(proj.path).is_dir()) else AGENT_CWD
     try:
-        subprocess.Popen(cmd, cwd=AGENT_CWD, start_new_session=True,
+        subprocess.Popen(cmd, cwd=cwd, start_new_session=True,
                          env=clean_agent_env(),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
         return f"spawn failed: {exc}", None
-    log(f"allocated agent for #{number} ({cmd[0]}"
+    log(f"allocated agent for {proj.repo}#{number} ({cmd[0]} in {cwd}"
         f"{'; ' + note if note else ''})")
     return None, note
 
@@ -869,100 +1227,358 @@ class QuietHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _query(self) -> dict:
+        from urllib.parse import parse_qs, urlparse
+        return {k: v[0] for k, v in
+                parse_qs(urlparse(self.path).query).items()}
+
+    def _body(self) -> dict:
+        try:
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            out = json.loads(raw or b"{}")
+            return out if isinstance(out, dict) else {}
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return {}
+
     def do_GET(self):  # noqa: N802 — stdlib name
+        path = self.path.split("?")[0]
+        q = self._query()
+
         # What this server is willing to do, so the page never draws a button
         # the server would refuse. One static answer per process lifetime.
-        if self.path == "/api/caps":
-            self._json(200, {"allocate": ALLOW_AGENTS})
+        if path == "/api/caps":
+            self._json(200, {"allocate": ALLOW_AGENTS, "projects": True,
+                             "induct": True})
             return
-        # Until the first cycle finishes, hand over the committed seed under the
-        # live manifest's own name — the page asks for one thing and gets the
-        # best picture that exists. Gzip goes over the wire as gzip: 11MB of JSON
-        # is 1.2MB compressed, and the browser inflates it for free.
-        if self.path.split("?")[0] == "/data/manifest.js" and \
-                not (DATA / "manifest.js").exists() and seed_meta():
-            blob = SEED_JS_GZ.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/javascript")
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Content-Length", str(len(blob)))
-            self.end_headers()
-            self.wfile.write(blob)
+
+        # ---- the observatory directory: what is watched, and what could be
+        if path == "/api/projects":
+            with REGISTRY_LOCK:
+                self._json(200, {
+                    "active": REGISTRY.get("active"),
+                    "roots": list(REGISTRY.get("roots") or []),
+                    "projects": [PROJECTS[s].summary()
+                                 for s in sorted(PROJECTS)],
+                })
             return
-        # /data/ is a URL the page asks for, and no longer a directory beneath
-        # the served root. Route it explicitly at the state directory: the
-        # fall-through below resolves against ROOT, which holds the program and
-        # not the history, so without this every mined manifest 404s while the
-        # seed branch above stops firing the moment one exists — an instrument
-        # that looks frozen rather than broken. Sits AFTER the seed branch on
-        # purpose: that branch owns the case where no mined manifest exists yet.
-        path = self.path.split("?")[0]
-        if path.startswith("/data/"):
+
+        if path == "/api/scan":
+            self._json(200, scan(refresh=q.get("refresh") == "1"))
+            return
+
+        if path == "/api/preflight":
+            target = q.get("path")
+            if not target:
+                self._json(400, {"error": "path is required"})
+                return
+            with REGISTRY_LOCK:
+                known = set(PROJECTS)
+            self._json(200, induction.preflight(
+                target, known_slugs=known, state_dir=STATE,
+                deep=q.get("deep", "1") == "1"))
+            return
+
+        if path == "/api/complete":
+            self._json(200, induction.complete_dir(q.get("path", "")))
+            return
+
+        # ---- the manifest, per project
+        # `?project=` names which; absent means the active one. The page has
+        # one data path and always has — the slug rides as a parameter rather
+        # than as a second URL shape, so a page from an older install still
+        # asks a question this server can answer.
+        if path == "/data/manifest.js" or path == "/data/manifest.json":
+            proj = project(q.get("project"))
             name = path[len("/data/"):]
-            # An allowlist, not a directory. The page has exactly one data
-            # dependency, while the state directory also holds the HTTP cache,
-            # the logs, and the agent prompts and reports — which carry ticket
-            # context and a local filesystem's shape. Serving a whole directory
-            # because one file in it is wanted is how those end up readable by
-            # anything that can reach the port.
-            target = DATA / name
-            if name not in ("manifest.js", "manifest.json") or not target.is_file():
-                self.send_error(404)
+            target = proj.manifest_js if name.endswith(".js") else proj.manifest_path
+            # Until the first cycle finishes, hand the committed seed over
+            # under the live manifest's own name — the page asks for one thing
+            # and gets the best picture that exists. Only the repository the
+            # seed is actually of: an inducted project served omarchy's seed
+            # would be a confident, wrong instrument. Gzip goes over the wire
+            # as gzip: 11MB of JSON is 1.2MB compressed, inflated for free.
+            if (not target.exists() and name.endswith(".js")
+                    and proj.slug == default_slug() and seed_meta()):
+                blob = SEED_JS_GZ.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/javascript")
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(blob)))
+                self.end_headers()
+                self.wfile.write(blob)
+                return
+            if not target.is_file():
+                # Not an error, and not an empty repository either. A project
+                # inducted a minute ago has no manifest yet; saying so lets the
+                # page draw "mining" rather than a swarm of nothing.
+                self._json(404, {"error": "no manifest yet",
+                                 "slug": proj.slug, "mining": proj.mining})
                 return
             blob = target.read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type",
-                             "text/javascript" if name.endswith(".js")
-                             else "application/json" if name.endswith(".json")
-                             else "text/plain; charset=utf-8")
+            self.send_header("Content-Type", "text/javascript"
+                             if name.endswith(".js") else "application/json")
             self.send_header("Content-Length", str(len(blob)))
             self.end_headers()
             self.wfile.write(blob)
             return
-        super().do_GET()
-
-    def do_POST(self):  # noqa: N802 — stdlib name
-        if self.path != "/api/allocate":
+        if path.startswith("/data/"):
             self.send_error(404)
             return
-        # a custom header forces a CORS preflight, so a random web page cannot
-        # fire this cross-origin; same-origin is our own app
+
+        # ---- static, and ONLY the app
+        # The handler is rooted at the install, which holds the whole git
+        # checkout: .git/config, the handoffs, the source of this file. None of
+        # that has ever been something the page asks for, and a directory
+        # served because one file in it was wanted is how the rest of it
+        # becomes someone's finding later. Measured on this machine, where the
+        # plugin directory is a symlink to a working tree, so the exposure
+        # reached harvested agent sessions rather than just a public clone.
+        if path in ("/", "/index.html"):
+            self.send_response(302)
+            self.send_header("Location", "/app/swarm.html")
+            self.end_headers()
+            return
+        if not path.startswith("/app/") or ".." in path:
+            self.send_error(404)
+            return
+        super().do_GET()
+
+    # ---- writes ---------------------------------------------------------------
+    # Every one of these carries the same custom-header requirement the
+    # allocation endpoint has had from the start: a custom header forces a CORS
+    # preflight, so a random page in another tab cannot fire them cross-origin,
+    # while our own same-origin app sends it without ceremony.
+    def do_POST(self):  # noqa: N802 — stdlib name
+        path = self.path.split("?")[0]
         if self.headers.get("X-Fix-Observatory") != "1":
             self.send_error(403, "missing X-Fix-Observatory header")
             return
-        if not ALLOW_AGENTS:
-            self._json(403, {
-                "ok": False,
-                "error": "agent allocation is off for this server — enable the "
-                         "widget's 'allow agent allocation' setting (or launch "
-                         "with FIX_OBSERVATORY_ALLOW_AGENTS=1) and reopen"})
+        body = self._body()
+
+        if path == "/api/allocate":
+            if not ALLOW_AGENTS:
+                self._json(403, {
+                    "ok": False,
+                    "error": "agent allocation is off for this server — enable "
+                             "the widget's 'allow agent allocation' setting (or "
+                             "launch with FIX_OBSERVATORY_ALLOW_AGENTS=1) and "
+                             "reopen"})
+                return
+            try:
+                number = int(body.get("number"))
+            except (ValueError, TypeError):
+                self._json(400, {"ok": False, "error": "bad body"})
+                return
+            err, note = allocate_agent(project(body.get("project")), number)
+            self._json(200 if err is None else 409,
+                       {"ok": err is None, "error": err, "note": note})
             return
-        try:
-            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            number = int(json.loads(raw or b"{}").get("number"))
-        except (ValueError, TypeError, json.JSONDecodeError):
-            self.send_error(400, "bad body")
+
+        if path == "/api/induct":
+            self._json(*induct(body.get("path") or ""))
             return
-        err, note = allocate_agent(number)
-        body = json.dumps({"ok": err is None, "error": err,
-                           "note": note}).encode()
-        self.send_response(200 if err is None else 409)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+
+        if path == "/api/forget":
+            self._json(*forget(body.get("slug") or ""))
+            return
+
+        if path == "/api/active":
+            slug = body.get("slug") or ""
+            with REGISTRY_LOCK:
+                if slug not in PROJECTS:
+                    self._json(404, {"ok": False, "error": f"no project {slug}"})
+                    return
+                REGISTRY["active"] = slug
+            save_registry()
+            self._json(200, {"ok": True, "active": slug})
+            return
+
+        if path == "/api/roots":
+            self._json(*edit_roots(body))
+            return
+
+        if path == "/api/mine":
+            proj = project(body.get("slug"))
+            enqueue_mine(proj.slug)
+            self._json(200, {"ok": True, "slug": proj.slug})
+            return
+
+        self.send_error(404)
+
+
+# ---- the verbs behind those routes -------------------------------------------
+SCAN_LOCK = threading.Lock()
+SCAN_CACHE: dict = {}
+SCAN_TTL = 300
+
+
+def scan(refresh: bool = False) -> dict:
+    """Discovered repositories, memoised for five minutes.
+
+    A walk of $HOME is cheap but not free, and the search widget re-asks on
+    every keystroke-driven open. The cached answer carries its own
+    `scanned_at`, so the page can say how old the list is instead of implying
+    it is live.
+    """
+    with SCAN_LOCK:
+        fresh = (SCAN_CACHE.get("scanned_at", 0) + SCAN_TTL) > time.time()
+        if SCAN_CACHE and fresh and not refresh:
+            return SCAN_CACHE
+        with REGISTRY_LOCK:
+            roots = list(REGISTRY.get("roots") or [])
+            known = {p.repo for p in PROJECTS.values()}
+        out = induction.scan_roots(roots)
+        for r in out["repos"]:
+            r["watched"] = bool(r.get("nwo")) and r["nwo"] in known
+        SCAN_CACHE.clear()
+        SCAN_CACHE.update(out)
+        return SCAN_CACHE
+
+
+def enqueue_mine(slug: str) -> None:
+    with REGISTRY_LOCK:
+        if slug not in MINE_QUEUE:
+            MINE_QUEUE.append(slug)
+
+
+def induct(path: str):
+    """Add a repository to the observatory. Returns (status, payload).
+
+    Runs the full battery first and refuses on a blocked verdict, with the
+    report attached — the page shows exactly which check said no. A degraded
+    verdict goes through: a repository that will mine slowly, or as a slice,
+    is still a repository worth watching, and the manifest records the
+    shortfall the way it always has.
+    """
+    if not path:
+        return 400, {"ok": False, "error": "path is required"}
+    with REGISTRY_LOCK:
+        known = set(PROJECTS)
+    report = induction.preflight(path, known_slugs=known, state_dir=STATE,
+                                 deep=True)
+    if report["blocked"] or not report.get("slug"):
+        return 409, {"ok": False, "error": "preflight refused this directory",
+                     "report": report}
+    meta = report["meta"]
+    slug = report["slug"]
+    with REGISTRY_LOCK:
+        REGISTRY["projects"][slug] = {
+            "repo": meta["nwo"],
+            "path": meta["path"],
+            "label": meta["nwo"],
+            "builtin": REGISTRY["projects"].get(slug, {}).get("builtin", False),
+            "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        REGISTRY["active"] = slug
+        PROJECTS[slug] = Project(slug, meta["nwo"], meta["path"], meta["nwo"],
+                                 False, REGISTRY["projects"][slug]["added_at"])
+    save_registry()
+    enqueue_mine(slug)
+    log(f"inducted {meta['nwo']} from {meta['path']} "
+        f"(verdict {report['verdict']}) — mining now")
+    return 200, {"ok": True, "slug": slug, "repo": meta["nwo"],
+                 "report": report}
+
+
+def forget(slug: str):
+    """Drop a project from the registry. Its mined history stays on disk.
+
+    Deleting the manifest would throw away the one expensive thing here — the
+    walk that took thirteen minutes — to save a few megabytes, and re-inducting
+    the same repository half an hour later would pay for it again. The
+    directory is named in the answer so anyone who does want the space knows
+    where to look.
+    """
+    with REGISTRY_LOCK:
+        proj = PROJECTS.get(slug)
+        if proj is None:
+            return 404, {"ok": False, "error": f"no project {slug}"}
+        if proj.builtin:
+            return 409, {"ok": False, "error":
+                         "this is the repository the observatory was built to "
+                         "watch, and the committed seed is a picture of it — it "
+                         "cannot be removed"}
+        REGISTRY["projects"].pop(slug, None)
+        PROJECTS.pop(slug, None)
+        if REGISTRY.get("active") == slug:
+            REGISTRY["active"] = default_slug()
+    save_registry()
+    return 200, {"ok": True, "slug": slug, "history_kept_at": str(proj.dir)}
+
+
+def edit_roots(body: dict):
+    """Add or remove a directory from the set the scan looks in."""
+    add, remove = body.get("add"), body.get("remove")
+    if not add and not remove:
+        return 400, {"ok": False, "error": "add or remove is required"}
+    with REGISTRY_LOCK:
+        roots = list(REGISTRY.get("roots") or [])
+        if add:
+            resolved = str(Path(add).expanduser())
+            if not Path(resolved).is_dir():
+                return 409, {"ok": False,
+                             "error": f"{resolved} is not a directory on this "
+                                      "machine"}
+            try:
+                resolved = str(Path(resolved).resolve())
+            except OSError:
+                pass
+            if resolved in roots:
+                return 200, {"ok": True, "roots": roots,
+                             "note": "already a search root"}
+            roots.append(resolved)
+        if remove:
+            roots = [r for r in roots if r != remove]
+        REGISTRY["roots"] = roots
+    save_registry()
+    with SCAN_LOCK:            # the old list no longer describes the new roots
+        SCAN_CACHE.clear()
+    return 200, {"ok": True, "roots": roots}
+
+
+def due_projects() -> list:
+    """Which projects this cycle mines, most deserving first.
+
+    The queue comes first and whole: an induction that has just been confirmed
+    should produce a swarm now, not at the top of the next quarter hour. After
+    that the active project — the one somebody is looking at — then the
+    stalest, and at most a couple more, so a machine watching a dozen
+    repositories still refreshes the one on screen promptly.
+    """
+    with REGISTRY_LOCK:
+        queued = [PROJECTS[s] for s in MINE_QUEUE if s in PROJECTS]
+        MINE_QUEUE.clear()
+        active = PROJECTS.get(REGISTRY.get("active") or "")
+        rest = [p for p in PROJECTS.values()
+                if p not in queued and p is not active]
+    rest.sort(key=lambda p: p.manifest_path.stat().st_mtime
+              if p.manifest_path.exists() else 0)
+    out = queued + ([active] if active and active not in queued else []) + rest[:2]
+    return out
 
 
 def serve() -> None:
-    DATA.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True)
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
     def miner():
         while True:
-            try:
-                mine_once()
-            except Exception as exc:  # keep serving even if a cycle dies
-                log(f"mine cycle failed: {exc}")
-            time.sleep(INTERVAL)
+            for proj in due_projects():
+                proj.mining = True
+                try:
+                    mine_once(proj)
+                except Exception as exc:  # keep serving even if a cycle dies
+                    proj.last_error = str(exc)
+                    log(f"[{proj.slug}] mine cycle failed: {exc}")
+                finally:
+                    proj.mining = False
+            # A queued induction should not wait out a quarter of an hour, so
+            # the sleep is chopped into slices the queue can interrupt.
+            for _ in range(max(1, INTERVAL // 5)):
+                if MINE_QUEUE:
+                    break
+                time.sleep(5)
 
     threading.Thread(target=miner, daemon=True).start()
     handler = functools.partial(QuietHandler, directory=str(ROOT))
@@ -976,12 +1592,34 @@ def serve() -> None:
     # install" test on a box that has ever run this reads the real one and
     # passes for the wrong reason. Saying which history is being served is what
     # makes that visible without anyone having to remember it.
-    log(f"state {DATA}"
-        f"{' (empty — the seed will be served until the first cycle lands)' if not (DATA / 'manifest.json').exists() else ''}")
-    log(f"serving http://127.0.0.1:{PORT}/app/swarm.html (repo={REPO}, "
-        f"poll={INTERVAL}s, "
-        f"{'exhaustive' if COMPLETE else 'newest %d pages, unauthenticated' % MAX_PAGES})")
+    with REGISTRY_LOCK:
+        active = project(None)
+        watched = len(PROJECTS)
+    log(f"state {STATE}"
+        f"{' (empty — the seed will be served until the first cycle lands)' if not active.manifest_path.exists() else ''}")
+    log(f"serving http://127.0.0.1:{PORT}/app/swarm.html — watching {watched} "
+        f"project(s), active {active.repo}, poll={INTERVAL}s")
     httpd.serve_forever()
+
+
+def boot() -> None:
+    """Everything a run needs on disk and in memory, in the one right order.
+
+    The registry has to exist before the migrations, because both of them need
+    to know which slug the built-in repository resolves to, and neither can ask
+    a registry that has not been read.
+    """
+    load_registry()
+    # Order is load-bearing, and the wrong way round is silent. Both migrations
+    # are guarded on the destination manifest not existing, so whichever runs
+    # first wins outright. The state directory is the LIVE history — the one a
+    # running server has been writing to — while the in-tree data/ is a fossil
+    # from before 0.2 that a working tree can carry for months. Letting the
+    # fossil go first hands a stale manifest to the instrument and leaves the
+    # real one sitting untouched one directory away, with nothing on screen to
+    # say which of the two is being served.
+    adopt_flat_state()
+    adopt_legacy_data()
 
 
 def main() -> None:
@@ -990,16 +1628,66 @@ def main() -> None:
     ap.add_argument("--serve", action="store_true", help="serve the app + mine on an interval")
     ap.add_argument("--seed", action="store_true",
                     help="maintainer verb: freeze the mined manifest into seed/")
+    ap.add_argument("--project", metavar="SLUG",
+                    help="which watched project to act on (default: the active one)")
+    ap.add_argument("--induct", metavar="DIR",
+                    help="add the repository in DIR to the observatory, after "
+                         "running the full preflight against it")
+    ap.add_argument("--preflight", metavar="DIR",
+                    help="run the induction checks against DIR and print them, "
+                         "changing nothing")
+    ap.add_argument("--list", action="store_true",
+                    help="list what this observatory watches")
+    ap.add_argument("--scan", action="store_true",
+                    help="list the repositories found under the search roots")
     args = ap.parse_args()
+    boot()
     if args.seed:
         print(write_seed())
         return
-    adopt_legacy_data()
-    load_cache()
+    if args.preflight:
+        report = induction.preflight(args.preflight, known_slugs=set(PROJECTS),
+                                     state_dir=STATE, deep=True)
+        print(f"{report.get('nwo') or args.preflight}: {report['verdict']}")
+        for c in report["checks"]:
+            mark = {"ok": "✓", "warn": "!", "fail": "✗", "unknown": "?"}[c["status"]]
+            print(f"  {mark} {c['label']}: {c['detail']}")
+            if c.get("fix"):
+                print(f"      fix: {c['fix']}")
+        return
+    if args.induct:
+        status, payload = induct(args.induct)
+        if payload.get("ok"):
+            print(f"inducted {payload['repo']} — mine it with: "
+                  f"{Path(__file__).name} --once --project {payload['slug']}")
+        else:
+            print(payload.get("error"))
+            for c in (payload.get("report") or {}).get("checks", []):
+                if c["status"] == "fail":
+                    print(f"  ✗ {c['label']}: {c['detail']}")
+        raise SystemExit(0 if payload.get("ok") else 1)
+    if args.list:
+        for slug in sorted(PROJECTS):
+            s = PROJECTS[slug].summary()
+            n = "unmined" if s["artifacts"] is None else f"{s['artifacts']} artifacts"
+            mark = "*" if slug == REGISTRY.get("active") else " "
+            print(f"{mark} {slug:<38} {s['repo']:<40} {n}"
+                  f"{' (seed)' if s['seeded'] else ''}")
+        return
+    if args.scan:
+        out = scan(refresh=True)
+        for r in out["repos"]:
+            print(f"{'watched' if r.get('watched') else '       '} "
+                  f"{(r.get('nwo') or '—'):<44} {r['path']}")
+        print(f"\n{len(out['repos'])} repositories under {len(out['roots'])} "
+              f"root(s), {out['dirs_visited']} directories visited"
+              + (" — TRUNCATED, this is not the whole machine"
+                 if out["truncated"] else ""))
+        return
     if args.serve:
         serve()
     else:
-        mine_once()
+        mine_once(project(args.project))
 
 
 if __name__ == "__main__":

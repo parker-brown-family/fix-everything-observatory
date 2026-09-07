@@ -182,13 +182,146 @@
     padding:6px 10px;font-size:10.5px;color:var(--fg);display:none;z-index:9;max-width:430px;line-height:1.5;
   }
   #tip .t2{color:var(--ghost)}
+
+  /* ===== the observatory directory: what is watched, what is on this machine,
+     and whether a candidate can honestly be watched at all ===== */
+  #dirBtn{
+    background:none;border:none;color:var(--white);font:inherit;letter-spacing:.06em;
+    cursor:pointer;padding:0 2px;border-bottom:1px dashed var(--dim);
+  }
+  #dirBtn:hover{color:var(--cyan);border-bottom-color:var(--cyan);background:none}
+  #dirBtn::after{content:" ▾";color:var(--ghost);font-size:9px}
+
+  #dir{position:fixed;inset:0;z-index:20;background:rgba(16,16,22,.82);display:none}
+  #dir.on{display:block}
+  .dcard{
+    position:absolute;inset:36px 30px;background:var(--bg);border:1px solid var(--dim);
+    display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.6);
+  }
+  .dhead{
+    display:flex;align-items:baseline;gap:14px;padding:13px 18px 11px;
+    border-bottom:1px solid var(--line);background:var(--bg2);flex:none;
+  }
+  .dhead h2{margin:0;font-size:13px;letter-spacing:.18em;color:var(--white);font-weight:700}
+  .dhead .dsub{font-size:10px;color:var(--ghost);letter-spacing:.04em;flex:1}
+  .dhead .dsub b{color:var(--cyan);font-weight:500}
+  #dclose{flex:none;padding:3px 9px 4px}
+  .dsearch{flex:none;padding:12px 18px 0;position:relative}
+  #dq{
+    width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--dim);
+    color:var(--fg);font:400 13px/1.5 'JetBrains Mono',monospace;padding:9px 12px;
+    letter-spacing:.02em;outline:none;
+  }
+  #dq:focus{border-color:var(--cyan)}
+  #dq::placeholder{color:var(--dim)}
+  #dcomplete{
+    position:absolute;left:18px;right:18px;top:calc(100% - 1px);z-index:3;
+    background:var(--panel);border:1px solid var(--cyan);border-top:none;max-height:210px;
+    overflow:auto;display:none;
+  }
+  #dcomplete.on{display:block}
+  #dcomplete div{padding:5px 12px;font-size:11px;color:var(--fg);cursor:pointer}
+  #dcomplete div:hover,#dcomplete div.cur{background:var(--line);color:var(--cyan)}
+
+  .dcols{flex:1;display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:0;min-height:0}
+  .dcol{
+    display:flex;flex-direction:column;min-height:0;overflow:auto;
+    padding:14px 18px 18px;border-right:1px solid var(--line);
+  }
+  .dcol:last-child{border-right:none;background:var(--bg2)}
+  .dcol h3{
+    margin:0 0 8px;font-size:9.5px;letter-spacing:.16em;color:var(--ghost);font-weight:500;
+    display:flex;align-items:center;gap:8px;flex:none;
+    position:sticky;top:-14px;z-index:2;background:var(--bg);padding:14px 0 6px;margin-top:-14px;
+  }
+  .dcol:last-child h3{background:var(--bg2)}
+  .dcol h3+h3{margin-top:18px}
+  .dcol h3 b{color:var(--fg);font-weight:700}
+  .dcol h3 button{margin-left:auto;font-size:8.5px;padding:2px 7px 3px}
+
+  .drow{
+    display:block;width:100%;text-align:left;background:var(--panel);border:1px solid transparent;
+    border-left:2px solid var(--dim);padding:7px 10px;margin-bottom:3px;cursor:pointer;
+    font:inherit;color:var(--fg);
+  }
+  .drow:hover,.drow.cur{background:var(--line);border-color:var(--dim);border-left-color:var(--cyan)}
+  .drow.active{border-left-color:var(--green)}
+  .drow .dn{font-size:11.5px;color:var(--fg);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* The repository name leads and the owner trails, because in a list of forty
+     rows that all begin "parker-brown-family/" the owner is the half that
+     carries no information and the name is the half that gets truncated. */
+  .drow .dn b{color:var(--white);font-weight:700}
+  .drow .dn i{color:var(--ghost);font-style:normal;font-size:9.5px;letter-spacing:.04em}
+  .drow.active .dn b{color:var(--green)}
+  .drow .dm{font-size:9.5px;color:var(--ghost);display:block;margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .drow .dm b{color:var(--blue);font-weight:500}
+  .dbadge{
+    display:inline-block;font-size:8px;letter-spacing:.1em;padding:1px 5px 2px;margin-left:6px;
+    border:1px solid var(--dim);color:var(--ghost);vertical-align:1px;
+  }
+  .dbadge.seed{border-color:var(--yellow);color:var(--yellow)}
+  .dbadge.mining{border-color:var(--cyan);color:var(--cyan)}
+  .dbadge.watched{border-color:var(--green);color:var(--green)}
+  /* a project with no manifest is UNMINED, not empty — same hatch the swarm
+     uses for an artifact nobody scored, so the two read as the one idea */
+  .dbadge.unmined{
+    border-color:var(--dim);color:var(--ghost);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.45) 3px 6px);
+  }
+  .dempty{font-size:10.5px;color:var(--ghost);line-height:1.6;padding:6px 2px}
+
+  .chips{display:flex;flex-wrap:wrap;gap:5px;flex:none}
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;background:var(--panel);
+    border:1px solid var(--line);padding:3px 4px 4px 8px;font-size:10px;color:var(--fg);
+    max-width:100%;
+  }
+  .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip button{padding:0 4px 1px;font-size:11px;line-height:1;color:var(--ghost);border-color:transparent}
+  .chip button:hover{color:var(--red);border-color:var(--red)}
+
+  /* the check battery */
+  #dreport h4{margin:0 0 3px;font-size:13px;color:var(--white);letter-spacing:.04em;font-weight:700}
+  #dreport .dpath{font-size:10px;color:var(--ghost);margin-bottom:12px;word-break:break-all}
+  .verdict{
+    display:inline-block;font-size:10px;letter-spacing:.16em;padding:3px 9px 4px;margin-bottom:12px;
+    border:1px solid;font-weight:700;
+  }
+  .verdict.ready{color:var(--green);border-color:var(--green)}
+  .verdict.degraded{color:var(--yellow);border-color:var(--yellow)}
+  .verdict.blocked{color:var(--red);border-color:var(--red)}
+  .verdict.unknown{color:var(--ghost);border-color:var(--dim);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.4) 3px 6px)}
+  .chk{display:flex;gap:9px;padding:6px 0;border-top:1px solid var(--line);font-size:10.5px;line-height:1.55}
+  .chk .mark{flex:none;width:13px;text-align:center;font-weight:700}
+  .chk.ok .mark{color:var(--green)} .chk.warn .mark{color:var(--yellow)}
+  .chk.fail .mark{color:var(--red)} .chk.unknown .mark{color:var(--dim)}
+  .chk.unknown{opacity:.72}
+  .chk .lab{color:var(--fg)}
+  /* Check details carry absolute paths, remote URLs and gh install prefixes.
+     Left to their own devices they push the whole panel sideways, so they wrap
+     anywhere rather than making the report a thing you scroll horizontally. */
+  .chk .det{color:var(--ghost);display:block;white-space:pre-line;overflow-wrap:anywhere}
+  .chk>span:last-child{min-width:0}
+  #dreport .dpath{overflow-wrap:anywhere}
+  .chk.fail .det,.chk.warn .det{color:#9aa5ce}
+  .chk .fixhint{display:block;margin-top:3px;color:var(--cyan)}
+  .dact{margin:16px 0 4px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .dact button{padding:7px 14px 8px;font-size:11px;letter-spacing:.1em}
+  .dact button.go{border-color:var(--green);color:var(--green)}
+  .dact button.go:hover{background:var(--green);color:var(--bg)}
+  .dact button:disabled{opacity:.4;cursor:not-allowed}
+  .dnote{font-size:10px;color:var(--ghost);line-height:1.6}
+  .dnote.bad{color:var(--red)}
+  .dspin{color:var(--cyan)}
 </style>
 </head>
 <body>
 <header>
   <img class="logo" src="omarchy-mark-256.png" alt="omarchy">
   <h1>WE CAN FIX EVERYTHING<small>THE REPAIR SWARM · FIX-EVERYTHING OBSERVATORY</small></h1>
-  <div class="diff"><span class="ctx">watching <span id="repoName">omacom/omarchy</span> repair itself</span>
+  <div class="diff"><span class="ctx">watching <button id="dirBtn" title="[p] switch project, or induct any repository on this machine"><span id="repoName">omacom/omarchy</span></button> repair itself</span>
 <del>every missing app, every incompatibility, every paper cut</del>
 <ins>one click · one disposable agent · one merged fix</ins></div>
   <div class="controls">
@@ -225,6 +358,38 @@
   <button id="speedBtn" title="[+/-] swarm motion speed">MOTION 0.5×</button>
 </footer>
 <div id="tip"></div>
+
+<div id="dir">
+  <div class="dcard">
+    <div class="dhead">
+      <h2>THE OBSERVATORY DIRECTORY</h2>
+      <span class="dsub">every repository on this machine is a candidate · <b>esc</b> closes</span>
+      <button id="dclose">✕</button>
+    </div>
+    <div class="dsearch">
+      <input id="dq" autocomplete="off" spellcheck="false"
+             placeholder="filter what is watched and what is on this machine — or type a path to add a search directory">
+      <div id="dcomplete"></div>
+    </div>
+    <div class="dcols">
+      <section class="dcol">
+        <h3>WATCHING <b id="dnw">—</b></h3>
+        <div id="dwatch"></div>
+        <h3>SEARCH DIRECTORIES <b id="dnr">—</b><button id="dadd">＋ ADD A DIRECTORY</button></h3>
+        <div id="droots" class="chips"></div>
+        <div id="drootnote" class="dempty"></div>
+      </section>
+      <section class="dcol">
+        <h3>FOUND ON THIS MACHINE <b id="dnf">—</b><button id="drescan">RESCAN</button></h3>
+        <div id="dfound"></div>
+      </section>
+      <section class="dcol">
+        <div id="dreport"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 /* ================= utils ================= */
@@ -397,9 +562,15 @@ function streamInScope(d){
   return rows;
 }
 
+// Which repository this page is an instrument for. One data path, as there has
+// always been — the project rides as a parameter rather than as a second URL
+// shape, so a page served by an older build still asks a question this server
+// can answer, and a newer server still answers an older page.
+let PROJECT=new URLSearchParams(location.search).get('project')||null;
+
 function loadManifest(first){
   const s=document.createElement('script');
-  s.src='../data/manifest.js?t='+Date.now();
+  s.src='../data/manifest.js?'+(PROJECT?'project='+encodeURIComponent(PROJECT)+'&':'')+'t='+Date.now();
   s.onload=()=>{
     if(window.SWARM_DATA){
       const atEnd=!DATA||T>=DATA.t1-1500;
@@ -475,6 +646,13 @@ function renderStats(){
   }
 }
 function setTween(k,v){(tweens[k]??={shown:v,target:v}).target=v}
+/* Counters animate because a number moving is how the swarm shows change. That
+   argument does not survive a change of SUBJECT: rolling 1,094 open issues down
+   to 2 over a second draws a collapse that never happened, in a repository that
+   was never being counted. Switching project clears them so the next render
+   starts from the new repository's own figures. */
+function clearTweens(){for(const k in tweens)delete tweens[k];
+  for(const [id] of STATS)$('#st-'+id).textContent='—'}
 function stepTweens(){
   for(const k in tweens){
     const tw=tweens[k], el=$('#st-'+k);
@@ -490,9 +668,15 @@ function syncOverlay(){
   const ov=$('#overlay'), d=cur();
   let html=null;
   if(!d){
+    // While a just-inducted project's first pass is running, the mine watcher
+    // owns this box and knows more than this branch does — which repository,
+    // whether it is queued or running, and whether it failed. Saying "the
+    // miner hasn't run" over the top of that would be both stale and vaguer.
+    if(awaitingFirstMine)return;
     html=`<b style="color:var(--yellow)">no manifest yet</b><br>
     the miner hasn't run — <code>fix-everything-observatory mine</code> builds
-    <code>data/manifest.js</code> from GitHub. Or watch a synthetic healing arc.
+    one from GitHub. ${LOCAL_API?'Or press <b>p</b> to point this observatory at '
+      +'any repository on this machine.':''} Or watch a synthetic healing arc.
     <div class="obtns"><button id="obSim">SIMULATE HISTORY</button></div>`;
   } else {
     const markerN=d.artifacts.filter(a=>a.attribution==='marker').length;
@@ -650,7 +834,11 @@ function renderInspector(){
     try{
       const r=await fetch('/api/allocate',{method:'POST',
         headers:{'Content-Type':'application/json','X-Fix-Observatory':'1'},
-        body:JSON.stringify({number:a.number})});
+        // Which repository's #N, said explicitly. The server has an active
+        // project of its own and two tabs can be looking at two different
+        // ones, so an unqualified number is an agent allocated against
+        // whichever repository somebody else last selected.
+        body:JSON.stringify({number:a.number,project:PROJECT})});
       const j=await r.json();
       ab.textContent=j.ok?'⚡ AGENT SPAWNED — check your terminal':'✕ '+(j.error||'allocation failed');
       // the server knows things the button cannot: which claude it found, or
@@ -1086,6 +1274,11 @@ function scrubFromX(x,r){
   lastFeedKey='';
 }
 document.addEventListener('keydown',e=>{
+  // The directory owns the keyboard while it is open — its own field handles
+  // Escape, arrows and Enter, and the transport keys underneath would
+  // otherwise eat every letter typed into the search box.
+  if(DIR.open){if(e.key==='Escape'&&document.activeElement!==$('#dq'))closeDir();return}
+  if(e.key==='p'){e.preventDefault();openDir();return}
   if(e.code==='Space'){e.preventDefault();$('#playBtn').click()}
   else if(e.key==='l')$('#modeBtn').click();
   else if(e.key==='s')$('#scopeBtn').click();
@@ -1105,9 +1298,356 @@ document.addEventListener('keydown',e=>{
 });
 setTimeout(dismissHint,15000);
 
+/* ================= the observatory directory =================
+   The half that makes this an instrument for any repository rather than for
+   one. Three columns, left to right in the order a decision is actually made:
+   what is already watched, what exists on this machine, and — for whichever
+   candidate is selected — the battery of checks that says whether watching it
+   would produce an honest picture or a confident wrong one.
+
+   Everything here is local-only by construction: the endpoints live on the
+   127.0.0.1 server, and a hosted copy of this page simply never opens the
+   panel, because a control that can only answer "no" is worse than no control. */
+const DIR={open:false,projects:[],roots:[],active:null,found:[],scan:null,
+           report:null,busy:'',cur:-1,rows:[],comp:[],compI:-1,q:''};
+
+const api=(p)=>fetch(p).then(r=>r.json());
+const post=(p,body)=>fetch(p,{method:'POST',
+  headers:{'Content-Type':'application/json','X-Fix-Observatory':'1'},
+  body:JSON.stringify(body||{})}).then(r=>r.json().then(j=>({status:r.status,j})));
+
+const looksLikePath=s=>/^[~/.]/.test(s.trim());
+const tilde=p=>String(p||'').replace(/^\/home\/[^/]+/,'~');
+// owner/repo, drawn name-first. Anything that is not owner/repo-shaped is
+// printed whole rather than guessed at.
+function nwoHtml(nwo){
+  const i=String(nwo||'').indexOf('/');
+  if(i<0)return esc(String(nwo||'—'));
+  return `<b>${esc(nwo.slice(i+1))}</b> <i>${esc(nwo.slice(0,i))}</i>`;
+}
+function matches(hay,q){
+  if(!q)return true;
+  return hay.toLowerCase().includes(q.toLowerCase());
+}
+function ago(iso){
+  const t=Date.parse(iso);
+  return isFinite(t)?fmtRel(Date.now()-t):'—';
+}
+
+function openDir(){
+  // Gated on the origin, not on a capability answer that may still be in
+  // flight: a panel that refuses to open because a probe has not returned is
+  // indistinguishable from a broken button. An older server without the
+  // project endpoints simply renders the empty state, which says so.
+  if(!LOCAL_API)return;
+  DIR.open=true;$('#dir').classList.add('on');
+  $('#dq').value=DIR.q;$('#dq').focus();$('#dq').select();
+  refreshDir();
+  if(!DIR.scan)loadScan(false);
+}
+function closeDir(){
+  DIR.open=false;$('#dir').classList.remove('on');hideComplete();
+}
+
+function refreshDir(){
+  return api('/api/projects').then(d=>{
+    DIR.projects=d.projects||[];DIR.roots=d.roots||[];DIR.active=d.active;
+    renderDir();
+  }).catch(()=>{});
+}
+function loadScan(force){
+  DIR.busy='scan';renderDir();
+  return api('/api/scan'+(force?'?refresh=1':'')).then(d=>{
+    DIR.scan=d;DIR.found=d.repos||[];DIR.busy='';renderDir();
+  }).catch(()=>{DIR.busy='';renderDir()});
+}
+
+/* the flat row list the arrow keys walk, across both columns */
+function dirRows(){
+  const q=DIR.q, rows=[];
+  for(const p of DIR.projects)
+    if(matches(p.repo+' '+(p.path||''),q))rows.push({kind:'watch',p});
+  for(const r of DIR.found){
+    if(r.watched||!r.supported)continue;
+    if(matches((r.nwo||'')+' '+r.path,q))rows.push({kind:'found',r});
+  }
+  return rows;
+}
+
+function renderDir(){
+  const rows=DIR.rows=dirRows();
+  const watch=rows.filter(r=>r.kind==='watch'), found=rows.filter(r=>r.kind==='found');
+  $('#dnw').textContent=DIR.projects.length;
+  $('#dnr').textContent=DIR.roots.length;
+  $('#dnf').textContent=DIR.busy==='scan'?'…':
+    (DIR.scan?found.length+(DIR.scan.truncated?'+':''):'—');
+
+  $('#dwatch').innerHTML=watch.length?watch.map(row=>{
+    const p=row.p,i=rows.indexOf(row);
+    // A project with no manifest reports null artifacts, never zero. Drawing
+    // that as "0 artifacts" would invent a measurement of an empty repository
+    // out of the fact that nobody has mined it yet.
+    const count=p.artifacts==null
+      ? '<span class="dbadge unmined">NOT MINED</span>'
+      : `<b>${p.artifacts.toLocaleString()}</b> artifacts`;
+    const bits=[count];
+    if(p.fetched_at)bits.push(ago(p.fetched_at));
+    if(p.complete===false)bits.push('partial horizon');
+    return `<button class="drow${p.slug===DIR.active?' active':''}${i===DIR.cur?' cur':''}"
+      data-i="${i}" title="${esc(p.repo)}"><span class="dn">${nwoHtml(p.repo)}${
+        p.seeded?'<span class="dbadge seed">SEED</span>':''}${
+        p.mining?'<span class="dbadge mining">MINING</span>':''}</span>
+      <span class="dm">${bits.join(' · ')}</span></button>`;
+  }).join(''):`<div class="dempty">${
+    DIR.projects.length?'nothing watched matches that filter.'
+    :'this server did not answer — is it still running?'}</div>`;
+
+  $('#dfound').innerHTML=found.length?found.map(row=>{
+    const r=row.r,i=rows.indexOf(row);
+    return `<button class="drow${i===DIR.cur?' cur':''}" data-i="${i}"
+      title="${esc(r.nwo)}\n${esc(r.path)}">
+      <span class="dn">${nwoHtml(r.nwo)}</span>
+      <span class="dm">${esc(tilde(r.path))}</span></button>`;
+  }).join(''):`<div class="dempty">${DIR.busy==='scan'?'scanning…':
+    DIR.scan?(DIR.q?'nothing under the search directories matches that.':
+      'every GitHub repository found under the search directories is already watched.')
+    :'not scanned yet.'}</div>`;
+
+  $('#droots').innerHTML=DIR.roots.map(r=>
+    `<span class="chip"><span title="${esc(r)}">${esc(tilde(r))}</span>
+     <button data-root="${esc(r)}" title="stop searching here">✕</button></span>`).join('');
+
+  // The scan's own limits, said out loud. A list that stopped early and a list
+  // that is complete look identical, and only one of them means "this is every
+  // repository on the machine".
+  const s=DIR.scan;
+  $('#drootnote').innerHTML=!s?'':
+    `${s.repos.length} git work tree${s.repos.length===1?'':'s'} under
+     ${s.dirs_visited.toLocaleString()} director${s.dirs_visited===1?'y':'ies'},
+     ${s.took_ms}ms${s.truncated?
+       ' — <b style="color:var(--yellow)">the walk hit its ceiling, so this is NOT the whole machine</b>':''}
+     ${s.repos.filter(r=>!r.supported).length?
+       `<br>${s.repos.filter(r=>!r.supported).length} hidden: no GitHub remote.`:''}`;
+
+  for(const b of document.querySelectorAll('#dwatch .drow,#dfound .drow'))
+    b.onclick=()=>{DIR.cur=+b.dataset.i;activateRow()};
+  for(const b of document.querySelectorAll('#droots button'))
+    b.onclick=()=>post('/api/roots',{remove:b.dataset.root}).then(()=>{
+      DIR.scan=null;refreshDir().then(()=>loadScan(true))});
+
+  renderReport();
+}
+
+const MARK={ok:'✓',warn:'!',fail:'✗',unknown:'?'};
+const VERDICT_LINE={
+  ready:'every check that could be run passed.',
+  degraded:'watchable, with something named below working worse than it should.',
+  blocked:'this cannot be watched honestly until the ✗ below is fixed.',
+  unknown:'something could not be measured. That is not the same as it being fine.',
+};
+
+function renderReport(){
+  const el=$('#dreport'), r=DIR.report;
+  if(DIR.busy==='preflight'){
+    el.innerHTML=`<h4 class="dspin">running the checks…</h4>
+      <div class="dpath">reading the work tree, resolving which account this
+      repository answers to, and asking GitHub how much history there is.</div>`;
+    return;
+  }
+  if(!r){
+    el.innerHTML=`<h4>pick a repository</h4>
+      <div class="dpath">A row on the left switches the instrument to it. A row
+      in the middle runs the induction checks against it first — every one of
+      them, with the ones that could not run shown as unmeasured rather than
+      left off the list.</div>`;
+    return;
+  }
+  const tallyBits=Object.entries(r.tally).filter(([,n])=>n)
+    .map(([k,n])=>`${n} ${k}`).join(' · ');
+  el.innerHTML=`
+    <h4>${esc(r.nwo||r.path)}</h4>
+    <div class="dpath">${esc(r.path)}</div>
+    <div class="verdict ${r.verdict}">${r.verdict.toUpperCase()}</div>
+    <div class="dnote" style="margin-bottom:10px">${VERDICT_LINE[r.verdict]||''}
+      <br>${tallyBits}</div>
+    ${r.checks.map(c=>`<div class="chk ${c.status}">
+      <span class="mark">${MARK[c.status]}</span>
+      <span><span class="lab">${esc(c.label)}</span>
+        <span class="det">${esc(c.detail)}</span>
+        ${c.fix?`<span class="fixhint">→ ${esc(c.fix)}</span>`:''}</span></div>`).join('')}
+    <div class="dact">
+      <button id="dgo" class="go"${r.blocked?' disabled':''}>${
+        r.blocked?'CANNOT INDUCT':'INDUCT '+esc(r.nwo||'')}</button>
+      <span class="dnote${r.blocked?' bad':''}">${r.blocked
+        ? 'refused by the check marked ✗ — nothing was written.'
+        : 'adds it to the observatory and starts the first mine immediately.'}</span>
+    </div>`;
+  const go=$('#dgo');
+  if(go&&!r.blocked)go.onclick=()=>doInduct(r.path);
+}
+
+function activateRow(){
+  const row=DIR.rows[DIR.cur];
+  if(!row)return;
+  renderDir();
+  if(row.kind==='watch')switchTo(row.p.slug);
+  else runPreflight(row.r.path);
+}
+
+function runPreflight(path){
+  DIR.busy='preflight';DIR.report=null;renderReport();
+  api('/api/preflight?deep=1&path='+encodeURIComponent(path)).then(r=>{
+    DIR.busy='';DIR.report=r;renderReport();
+  }).catch(e=>{DIR.busy='';DIR.report=null;
+    $('#dreport').innerHTML=`<h4 style="color:var(--red)">the server did not answer</h4>
+      <div class="dpath">${esc(String(e))}</div>`});
+}
+
+function doInduct(path){
+  const go=$('#dgo');if(go){go.disabled=true;go.textContent='INDUCTING…'}
+  post('/api/induct',{path}).then(({j})=>{
+    if(!j.ok){DIR.report=j.report||DIR.report;renderReport();return}
+    refreshDir().then(()=>{DIR.scan=null;loadScan(true)});
+    switchTo(j.slug);
+  });
+}
+
+/* ---- switching the instrument to another repository ---------------------
+   A full page reload would be simpler and is what this deliberately does not
+   do: the swarm's whole point is that it is a continuous surface, and blanking
+   the window to change subject makes the two repositories feel like two
+   programs. Everything derived from the manifest is dropped explicitly here
+   instead, so nothing of the previous repository survives into the next. */
+function switchTo(slug){
+  PROJECT=slug;
+  post('/api/active',{slug});
+  history.replaceState(null,'','?project='+encodeURIComponent(slug));
+  DATA=null;SIMDATA=null;lastLiveT=0;sel=null;hits=[];pings=[];fx=[];
+  lastCrossT=null;lastFeedKey='';visCache={key:'',rows:[]};streamCache={key:'',rows:[]};
+  SPRITES.clear();clearTweens();AGG=null;$('#feed').innerHTML='';
+  if(SIM)setSim(false);
+  $('#repoName').textContent='…';
+  closeDir();
+  loadManifest(true);
+  waitForFirstMine(slug);
+}
+
+/* A project inducted a moment ago has no manifest, and that is neither an
+   error nor an empty repository. Poll until the first pass lands, and say
+   which of the two states the instrument is in while it does. */
+let mineWatch=0, awaitingFirstMine=false;
+function waitForFirstMine(slug){
+  clearTimeout(mineWatch);
+  awaitingFirstMine=true;
+  const tick=()=>{
+    if(DATA||PROJECT!==slug){awaitingFirstMine=false;return}
+    api('/api/projects').then(d=>{
+      const p=(d.projects||[]).find(x=>x.slug===slug);
+      if(!p||PROJECT!==slug)return;
+      const ov=$('#overlay');
+      ov.style.display='block';
+      ov.innerHTML=p.error
+        ? `<b style="color:var(--red)">the first mine failed</b><br>
+           <code>${esc(p.error)}</code><br>Nothing was written — this project has
+           no picture yet, which is not the same as an empty repository.`
+        : `<b style="color:var(--cyan)">${esc(p.repo)} — first pass ${
+             p.mining?'running':'queued'}</b><br>
+           Walking the issue, comment and event streams to their ends. The swarm
+           appears the moment the manifest lands; nothing is lost if you leave.`;
+      if(p.artifacts!=null)loadManifest(true);
+      mineWatch=setTimeout(tick,4000);
+    }).catch(()=>{mineWatch=setTimeout(tick,8000)});
+  };
+  mineWatch=setTimeout(tick,1200);
+}
+
+/* ---- the search field, which is also the add-a-directory field ---------- */
+function hideComplete(){DIR.comp=[];DIR.compI=-1;$('#dcomplete').classList.remove('on')}
+function renderComplete(){
+  const el=$('#dcomplete');
+  if(!DIR.comp.length){hideComplete();return}
+  el.innerHTML=DIR.comp.map((p,i)=>
+    `<div class="${i===DIR.compI?'cur':''}" data-p="${esc(p)}">${esc(p)}</div>`).join('');
+  el.classList.add('on');
+  for(const d of el.children)d.onclick=()=>{$('#dq').value=d.dataset.p;onQuery()};
+}
+function onQuery(){
+  const v=$('#dq').value;
+  DIR.q=v;DIR.cur=-1;
+  if(looksLikePath(v)){
+    // The field is doing two jobs, and the completions are how it says so:
+    // the moment the text looks like a path, it stops being a filter and
+    // starts being a directory picker that only offers directories that exist.
+    api('/api/complete?path='+encodeURIComponent(v)).then(d=>{
+      DIR.comp=d.entries||[];DIR.compI=-1;renderComplete();
+    }).catch(hideComplete);
+    $('#dadd').textContent='＋ ADD '+(tilde(v)||'…');
+  } else {
+    hideComplete();
+    $('#dadd').textContent='＋ ADD A DIRECTORY';
+  }
+  renderDir();
+}
+function addRoot(){
+  const v=$('#dq').value.trim();
+  if(!looksLikePath(v)){
+    $('#dq').focus();
+    $('#drootnote').innerHTML=`<b style="color:var(--yellow)">type a path first</b>
+      — start with <code>/</code> or <code>~</code> and the field completes
+      directories that actually exist on this machine.`;
+    return;
+  }
+  post('/api/roots',{add:v}).then(({j})=>{
+    if(!j.ok){$('#drootnote').innerHTML=
+      `<b style="color:var(--red)">${esc(j.error||'refused')}</b>`;return}
+    $('#dq').value='';onQuery();
+    DIR.scan=null;refreshDir().then(()=>loadScan(true));
+  });
+}
+
+$('#dirBtn').onclick=openDir;
+$('#dclose').onclick=closeDir;
+$('#dadd').onclick=addRoot;
+$('#drescan').onclick=()=>loadScan(true);
+$('#dir').onclick=e=>{if(e.target===$('#dir'))closeDir()};
+$('#dq').oninput=onQuery;
+$('#dq').onkeydown=e=>{
+  if(DIR.comp.length&&(e.key==='ArrowDown'||e.key==='ArrowUp')){
+    DIR.compI=Math.max(0,Math.min(DIR.comp.length-1,
+      DIR.compI+(e.key==='ArrowDown'?1:-1)));
+    renderComplete();e.preventDefault();return;
+  }
+  if(e.key==='Tab'&&DIR.comp.length){
+    $('#dq').value=DIR.comp[Math.max(0,DIR.compI)];onQuery();e.preventDefault();return;
+  }
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    DIR.cur=Math.max(0,Math.min(DIR.rows.length-1,
+      DIR.cur+(e.key==='ArrowDown'?1:-1)));
+    renderDir();e.preventDefault();return;
+  }
+  if(e.key==='Enter'){
+    if(DIR.compI>=0){$('#dq').value=DIR.comp[DIR.compI];onQuery();return}
+    if(looksLikePath($('#dq').value)){addRoot();return}
+    if(DIR.cur<0&&DIR.rows.length)DIR.cur=0;
+    activateRow();return;
+  }
+  if(e.key==='Escape'){
+    if(DIR.comp.length){hideComplete();return}
+    if($('#dq').value){$('#dq').value='';onQuery();return}
+    closeDir();
+  }
+};
+
 /* ================= boot ================= */
 buildStatsBar();
 loadManifest(true);
+// The directory is a local-server surface. Against a hosted copy of this page
+// the button says why it does nothing rather than opening on an empty panel.
+if(!LOCAL_API){
+  $('#dirBtn').title='the project directory needs the local observatory server';
+  $('#dirBtn').style.borderBottomStyle='none';
+  $('#dirBtn').style.cursor='default';
+}else refreshDir();
 setInterval(()=>{if(!SIM)loadManifest(false)},45000);
 requestAnimationFrame(draw);
 </script>

@@ -89,13 +89,21 @@ fi
 printf '\n\033[1mpython\033[0m\n'
 
 if have python3; then
-  if python3 -m py_compile "$root/observatory.py" 2>/dev/null; then
-    ok "observatory.py compiles"
+  py_bad=0
+  for f in "$root"/*.py; do
+    python3 -m py_compile "$f" 2>/dev/null || { err "${f#"$root/"} does not compile"; py_bad=1; }
+  done
+  [[ $py_bad -eq 0 ]] && ok "every python module compiles"
+  # observatory.py imports induction at module scope, so a rename or a missing
+  # sibling is a startup crash rather than a compile error — the glob above
+  # would still pass. Import it the way the program does.
+  if (cd "$root" && python3 -c 'import observatory' >/dev/null 2>&1); then
+    ok "observatory imports cleanly"
   else
-    err "observatory.py does not compile"
+    err "observatory.py cannot be imported (run: python3 -c 'import observatory')"
   fi
 else
-  warn "python3 not found — observatory.py unchecked"
+  warn "python3 not found — the python modules are unchecked"
 fi
 
 printf '\n\033[1mshell\033[0m\n'

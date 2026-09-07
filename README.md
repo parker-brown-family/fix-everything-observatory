@@ -10,7 +10,54 @@ work **smells agentic**.
 > Agents are disposable ships. Issues and comments are the civilization.
 > The repository is the planet. This is the observatory.
 
-Click the 🌀 chip in the bar → the swarm opens.
+**Left-click** the 🌀 chip in the bar → the swarm opens. **Right-click** it →
+the picker, over every repository on this machine.
+
+## Any repository, not just omarchy
+
+The observatory started pointed at one repo. It now points at any of them.
+Right-clicking the bar glyph opens a search field over two lists at once: the
+projects already being watched, and every git work tree found under a set of
+search directories you control. Type three letters, press enter, and the
+observatory opens on that repository. Type a path instead of a filter and the
+same field becomes a directory picker — it completes directories that actually
+exist — with a button that adds one to the search.
+
+Picking a repository that is *not* yet watched runs the induction battery: fifteen
+checks that decide whether watching it would produce an honest instrument or a
+confident wrong one.
+
+```
+bin/fix-everything-observatory preflight ~/src/some-repo   # run the checks, change nothing
+bin/fix-everything-observatory induct    ~/src/some-repo   # add it, and mine it now
+bin/fix-everything-observatory scan                        # what is on this machine
+bin/fix-everything-observatory projects                    # what is watched
+```
+
+The battery reads the work tree without spawning git, follows `~/.ssh/config`
+host aliases so a `git@github-bfs:` remote is recognised as GitHub, and asks
+`gh` for a token **with the repository as its working directory** — which is
+what makes a machine with several GitHub accounts resolve each repository to the
+right one instead of to whichever account the server happened to start under.
+Then it asks GitHub whether that token can see the repository at all, whether
+issues are even enabled, how much history there is (the search index answers
+that; `/issues` moved to cursor pagination and no longer will), and whether the
+first mine fits in this hour's request budget.
+
+Two rules run through all of it, and they are the same rules the swarm itself
+keeps:
+
+- **A check that could not run is unmeasured, never a pass.** A battery that
+  stopped at check three still shows checks four through fifteen, each marked
+  unknown and naming the check that stopped it. Dropping them would make the
+  report shorter and more confident exactly as the news got worse.
+- **The verdict never exceeds the evidence.** `ready`, `degraded`, `blocked`,
+  or `unknown` — and a project that has not been mined reports *no* artifact
+  count rather than a count of zero.
+
+Each project keeps its own mined history, its own HTTP cache and its own token
+under `$XDG_STATE_HOME/fix-everything-observatory/projects/<owner>__<repo>/`, so
+two repositories reachable by two different accounts never share either.
 
 ## Install
 
@@ -156,9 +203,10 @@ allowed to be the same grey dot.
 |---|---|
 | `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `manifest.{json,js}` into the state directory (`$XDG_STATE_HOME`, or `FIX_OBSERVATORY_STATE` to override), serves it at the `/data/` URL the page asks for. Stdlib only. Skips a cycle below 8 API requests remaining. |
 | `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
-| `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. A click ensures the server and opens the swarm; the widget's one setting is the agent-allocation toggle. |
+| `induction.py` | Discovery and the check battery: walks the search directories for git work trees, reads each remote out of `.git/config` without spawning git, and runs the fifteen ordered checks that decide whether a repository can honestly be watched. Stdlib only. |
+| `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. Left-click ensures the server and opens the swarm; right-click opens the project picker; the widget's one setting is the agent-allocation toggle. |
 | `bin/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
-| `bin/fix-everything-observatory` | Entrypoint: `open · mine · seed · serve · status · install`. |
+| `bin/fix-everything-observatory` | Entrypoint: `open [project] · daemon · mine · seed · serve · status · install · scan · preflight · induct · projects`. |
 | `seed/manifest.js.gz` | A mined manifest, committed. The server hands it over under the live manifest's name until the first cycle finishes, so a fresh clone opens on a full swarm rather than a thirteen-minute empty one. 1.2MB gzipped; the page dates it and says what it is. Refresh it with `bin/fix-everything-observatory seed`. |
 | `contract/omarchy-fix-event-v1.md` | The event-marker pattern that makes a ticket definitively attributable to the one-click fixer. |
 | `docs/` | Research notes, decision records (0001 IA, 0002 smell + stats), QA pass. |
@@ -167,6 +215,7 @@ allowed to be the same grey dot.
 
 ```
 bin/fix-everything-observatory open      # ensure server, open the swarm
+bin/fix-everything-observatory daemon    # ensure the server, put nothing on screen
 bin/fix-everything-observatory status    # is it up? recent log
 bin/fix-everything-observatory seed      # freeze today's manifest as the committed seed
 bin/fix-everything-observatory install   # optional: desktop entry for app launchers

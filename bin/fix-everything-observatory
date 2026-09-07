@@ -37,10 +37,32 @@ ensure_server() {
 
 case "${1:-open}" in
   open)
+    # An optional project slug: the bar widget's search results each open the
+    # observatory pointed at their own repository, and the page reads the slug
+    # straight off the query string.
     ensure_server
+    if [ -n "${2:-}" ]; then
+      exec xdg-open "${URL}?project=${2}"
+    fi
     exec xdg-open "$URL" ;;
+  daemon)
+    # Bring the server up without putting anything on screen. The bar widget
+    # calls this before it asks the server anything, because a popup that
+    # answers "nothing is watched" when the truth is "nothing is running" is
+    # the worst of the three states it could be in.
+    ensure_server ;;
   mine)
     exec python3 "$ROOT/observatory.py" --once ;;
+  projects|list)
+    exec python3 "$ROOT/observatory.py" --list ;;
+  scan)
+    exec python3 "$ROOT/observatory.py" --scan ;;
+  induct)
+    [ -n "${2:-}" ] || { echo "usage: $0 induct <directory>" >&2; exit 2; }
+    exec python3 "$ROOT/observatory.py" --induct "$2" ;;
+  preflight|check)
+    [ -n "${2:-}" ] || { echo "usage: $0 preflight <directory>" >&2; exit 2; }
+    exec python3 "$ROOT/observatory.py" --preflight "$2" ;;
   seed)
     # Freeze today's manifest into the committed seed, so the next fresh clone
     # opens on a full swarm instead of a thirteen-minute empty one.
@@ -80,6 +102,7 @@ EOF
     echo "bar chip (if not already enabled):"
     echo "omarchy plugin enable brownfamilysports.observatory" ;;
   *)
-    echo "usage: fix-everything-observatory {open|mine|serve|status|install}" >&2
+    echo "usage: fix-everything-observatory {open [project]|daemon|mine|serve|status|install}" >&2
+    echo "       fix-everything-observatory {projects|scan|preflight DIR|induct DIR}" >&2
     exit 2 ;;
 esac
