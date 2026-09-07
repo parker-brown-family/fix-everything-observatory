@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Fix-Everything Observatory — single entrypoint any tray, keybind, or launcher can call.
+# Fix-Everything Observatory — single entrypoint any bar widget, keybind, or
+# launcher can call. The Omarchy shell plugin's chip (BarWidget.qml) runs
+# `… open`; everything else is for hands and scripts.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${FIX_OBSERVATORY_PORT:-4517}"
@@ -37,8 +39,6 @@ case "${1:-open}" in
     exec python3 "$ROOT/observatory.py" --once ;;
   serve)
     exec python3 "$ROOT/observatory.py" --serve ;;
-  tray)
-    exec python3 "$ROOT/tray/fix-observatory-sni.py" ;;
   status)
     if up; then echo "server: up · $URL"; else echo "server: down"; fi
     if [ -f "$ROOT/data/manifest.json" ]; then
@@ -47,8 +47,26 @@ case "${1:-open}" in
       echo "manifest: absent — run: $0 mine"
     fi ;;
   install)
-    exec "$ROOT/tray/install-tray.sh" ;;
+    # Optional desktop entry, so app launchers can open the swarm too. The bar
+    # presence itself is the Omarchy shell plugin — no extra install surface:
+    #   omarchy plugin add https://github.com/parker-brown-family/fix-everything-observatory --enable
+    APPS="$HOME/.local/share/applications"
+    mkdir -p "$APPS"
+    cat > "$APPS/fix-everything-observatory.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Fix-Everything Observatory
+Comment=Watch the Omarchy repair swarm heal the repo
+Exec=$ROOT/bin/fix-everything-observatory open
+Icon=$ROOT/app/omarchy-logo.png
+Terminal=false
+Categories=Development;Monitor;
+EOF
+    echo "desktop entry: $APPS/fix-everything-observatory.desktop"
+    echo
+    echo "bar chip (if not already enabled):"
+    echo "omarchy plugin enable brownfamilysports.observatory" ;;
   *)
-    echo "usage: fix-everything-observatory {open|mine|serve|tray|status|install}" >&2
+    echo "usage: fix-everything-observatory {open|mine|serve|status|install}" >&2
     exit 2 ;;
 esac
