@@ -37,12 +37,20 @@ case "${1:-open}" in
     exec xdg-open "$URL" ;;
   mine)
     exec python3 "$ROOT/observatory.py" --once ;;
+  seed)
+    # Freeze today's manifest into the committed seed, so the next fresh clone
+    # opens on a full swarm instead of a thirteen-minute empty one.
+    exec python3 "$ROOT/observatory.py" --seed ;;
   serve)
     exec python3 "$ROOT/observatory.py" --serve ;;
   status)
     if up; then echo "server: up · $URL"; else echo "server: down"; fi
     if [ -f "$ROOT/data/manifest.json" ]; then
       tail -c 2000 "$ROOT/data/observatory.log" 2>/dev/null | tail -n 3 || true
+    elif [ -f "$ROOT/seed/manifest.js.gz" ]; then
+      n=$(grep -o '"artifacts": [0-9]*' "$ROOT/seed/manifest.meta.json" 2>/dev/null | grep -o '[0-9]*' || true)
+      when=$(grep -o '"fetched_at": "[0-9-]*' "$ROOT/seed/manifest.meta.json" 2>/dev/null | tail -c 11 || true)
+      echo "manifest: not mined yet — serving the committed seed (${n:-?} artifacts, mined ${when:-?})"
     else
       echo "manifest: absent — run: $0 mine"
     fi ;;

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import gzip
 import json
 import os
 import re
@@ -40,6 +41,15 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 CACHE_PATH = DATA / "http-cache.json"
+# A fresh clone has no manifest, and building one is ~590 conditional round trips
+# and thirteen minutes. Rather than show an empty instrument for that whole time,
+# we commit one mined manifest, gzipped, and serve it until the live one lands.
+# It is a picture of a real past, not a placeholder: its own fetched_at travels
+# with it, the page labels it, and the coverage block is the one that was true
+# when it was mined.
+SEED_DIR = ROOT / "seed"
+SEED_JS_GZ = SEED_DIR / "manifest.js.gz"
+SEED_META = SEED_DIR / "manifest.meta.json"
 REPO = os.environ.get("FIX_OBSERVATORY_REPO", "omacom/omarchy")
 PORT = int(os.environ.get("FIX_OBSERVATORY_PORT", "4517"))
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -69,6 +79,15 @@ INTERVAL = int(os.environ.get("FIX_OBSERVATORY_INTERVAL", "900" if TOKEN else "3
 # ticket: the page POSTs an issue number, the server writes a context-rich prompt
 # and opens a terminal running `claude` primed on it. Local instances only — the
 # server binds 127.0.0.1, and a hosted copy of the page never renders the button.
+#
+# OFF unless the person running the server turned it on: a marketplace install
+# must not ship a process-spawning endpoint armed, however local. The bar
+# widget's settings toggle sets this flag on the launch it makes; /api/caps
+# tells the page which posture this server was born with, so the button only
+# renders against a server that would honour it. The flag is read once at
+# start on purpose — an armed/disarmed state that could be flipped over an
+# unauthenticated local socket would not be a posture, just a request away.
+ALLOW_AGENTS = os.environ.get("FIX_OBSERVATORY_ALLOW_AGENTS") == "1"
 AGENT_CMD = os.environ.get("FIX_OBSERVATORY_AGENT_CMD")   # shell template; {prompt_file}
 AGENT_CWD = os.environ.get("FIX_OBSERVATORY_AGENT_CWD", str(Path.home()))
 MIN_BUDGET = 8  # skip a cycle rather than spend the last requests
@@ -166,6 +185,51 @@ def save_cache() -> None:
         CACHE_PATH.write_text(json.dumps({"v": CACHE_VERSION, "entries": _cache}))
     except Exception as exc:
         log(f"cache save failed: {exc}")
+
+
+# ---- the committed seed ------------------------------------------------------
+def seed_meta() -> dict | None:
+    """What the committed seed holds, or None if there isn't a usable one.
+
+    Read from a tiny sidecar so nothing has to decompress 11MB to answer
+    "which repo is this a picture of?" — and the answer matters: a seed of
+    omarchy served into an observatory pointed at some other repo would be a
+    confident, wrong instrument.
+    """
+    try:
+        meta = json.loads(SEED_META.read_text())
+    except Exception:
+        return None
+    if not SEED_JS_GZ.exists() or meta.get("repo") != REPO:
+        return None
+    return meta
+
+
+def write_seed() -> str:
+    """Freeze the manifest on disk into the committed seed."""
+    manifest = json.loads((DATA / "manifest.json").read_text())
+    manifest["seed"] = True
+    cov = manifest.get("coverage") or {}
+    SEED_DIR.mkdir(exist_ok=True)
+    body = ("window.SWARM_DATA = " + json.dumps(manifest, indent=1) + ";\n").encode()
+    # mtime=0 so regenerating an unchanged manifest produces identical bytes and
+    # git records no new 1MB blob.
+    with gzip.GzipFile(filename="", mode="wb", fileobj=SEED_JS_GZ.open("wb"),
+                       compresslevel=9, mtime=0) as fh:
+        fh.write(body)
+    meta = {
+        "repo": manifest.get("repo"),
+        "fetched_at": manifest.get("fetched_at"),
+        "complete": bool(cov.get("complete")),
+        "artifacts": len(manifest.get("artifacts") or []),
+        "comments": len(manifest.get("comments") or []),
+        "events": len(manifest.get("events") or []),
+        "bytes": SEED_JS_GZ.stat().st_size,
+    }
+    SEED_META.write_text(json.dumps(meta, indent=1) + "\n")
+    return (f"seed written: {meta['artifacts']} artifacts / {meta['comments']} comments "
+            f"/ {meta['events']} events, mined {meta['fetched_at']}, "
+            f"{meta['bytes'] / 1048576:.1f}MB gzipped → {SEED_JS_GZ}")
 
 
 def _note_rate(headers) -> None:
@@ -404,6 +468,20 @@ def mine_once() -> None:
                 and (prev.get("coverage") or {}).get("complete")):
             log(f"this cycle is a slice ({len(arts)} artifacts) and the manifest "
                 f"on disk was walked to the end — keeping the complete one. "
+                f"A token is what raises the horizon.")
+            save_cache()
+            return
+
+    # The same rule, against the committed seed. Without this, an untokened first
+    # run writes 300 artifacts over a served seed of 8,887 and the swarm SHRINKS
+    # on its first successful mine — fresher by two days, blind by fifteen months.
+    # Stale-and-whole beats fresh-and-truncated for an instrument about long arcs,
+    # and the page dates the seed so nobody mistakes it for now.
+    if not issues_complete and not manifest_path.exists():
+        sm = seed_meta()
+        if sm and sm.get("complete"):
+            log(f"this cycle is a slice ({len(arts)} artifacts) and the committed "
+                f"seed was walked to the end — serving the seed, writing nothing. "
                 f"A token is what raises the horizon.")
             save_cache()
             return
@@ -705,6 +783,36 @@ class QuietHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def _json(self, code: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802 — stdlib name
+        # What this server is willing to do, so the page never draws a button
+        # the server would refuse. One static answer per process lifetime.
+        if self.path == "/api/caps":
+            self._json(200, {"allocate": ALLOW_AGENTS})
+            return
+        # Until the first cycle finishes, hand over the committed seed under the
+        # live manifest's own name — the page asks for one thing and gets the
+        # best picture that exists. Gzip goes over the wire as gzip: 11MB of JSON
+        # is 1.2MB compressed, and the browser inflates it for free.
+        if self.path.split("?")[0] == "/data/manifest.js" and \
+                not (DATA / "manifest.js").exists() and seed_meta():
+            blob = SEED_JS_GZ.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob)
+            return
+        super().do_GET()
+
     def do_POST(self):  # noqa: N802 — stdlib name
         if self.path != "/api/allocate":
             self.send_error(404)
@@ -713,6 +821,13 @@ class QuietHandler(SimpleHTTPRequestHandler):
         # fire this cross-origin; same-origin is our own app
         if self.headers.get("X-Fix-Observatory") != "1":
             self.send_error(403, "missing X-Fix-Observatory header")
+            return
+        if not ALLOW_AGENTS:
+            self._json(403, {
+                "ok": False,
+                "error": "agent allocation is off for this server — enable the "
+                         "widget's 'allow agent allocation' setting (or launch "
+                         "with FIX_OBSERVATORY_ALLOW_AGENTS=1) and reopen"})
             return
         try:
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -758,7 +873,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--once", action="store_true", help="mine one pass and exit")
     ap.add_argument("--serve", action="store_true", help="serve the app + mine on an interval")
+    ap.add_argument("--seed", action="store_true",
+                    help="freeze data/manifest.json into the committed seed/")
     args = ap.parse_args()
+    if args.seed:
+        print(write_seed())
+        return
     load_cache()
     if args.serve:
         serve()

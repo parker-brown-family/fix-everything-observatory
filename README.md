@@ -10,7 +10,38 @@ work **smells agentic**.
 > Agents are disposable ships. Issues and comments are the civilization.
 > The repository is the planet. This is the observatory.
 
-Click the Omarchy chip in the bar tray → the swarm opens.
+Click the 🌀 chip in the bar → the swarm opens.
+
+## Install
+
+This is an [Omarchy](https://omarchy.org/) shell plugin (`brownfamilysports.observatory`):
+
+```
+omarchy plugin add https://github.com/parker-brown-family/fix-everything-observatory --enable
+```
+
+That puts the chip in the bar. A click starts the observatory's own local
+server (`127.0.0.1:4517`, reachable from this machine only) and opens the swarm
+in your browser. The committed seed snapshot fills the instrument immediately;
+the first full mine of the live repo replaces it when it lands (~13 minutes
+with a token, see **Coverage** below).
+
+Needs `python3` (stdlib only) and a browser. Optional: `gh` — its token is
+borrowed to raise the mining horizon (read-only calls to GitHub's public API) —
+and `claude`, only if you turn on agent allocation (below; off by default).
+
+What it touches: network to `api.github.com` only; the server binds
+`127.0.0.1`; everything it writes stays inside its own plugin directory
+(`data/`). No user configuration is modified.
+
+Remove it the same way it came, mined data and all:
+
+```
+omarchy plugin remove brownfamilysports.observatory
+```
+
+If you also added the optional launcher entry (`bin/fix-everything-observatory
+install`), delete `~/.local/share/applications/fix-everything-observatory.desktop`.
 
 ## What it shows
 
@@ -50,7 +81,12 @@ Click the Omarchy chip in the bar tray → the swarm opens.
   behind warns in the inspector, because an older Claude Code cannot resolve
   every configured model and that failure lands *inside* a terminal the button
   has already called a success. The spawn itself holds the window open on any
-  nonzero exit and names the fix. The button
+  nonzero exit and names the fix. Allocation is **off by default**: the server
+  refuses `/api/allocate` — and the page, which asks `/api/caps` what this
+  server is willing to do, never draws the button — unless the server was
+  launched with `FIX_OBSERVATORY_ALLOW_AGENTS=1`, which is exactly what the
+  widget's *allow agent allocation* setting does, from the next server start.
+  The button
   exists only on a local instance — the page POSTs to the local server, which
   spawns the agent; a hosted copy of the page has no server behind it and never
   renders it. The endpoint requires a custom header, so a random web page cannot
@@ -110,9 +146,10 @@ allowed to be the same grey dot.
 |---|---|
 | `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `data/manifest.{json,js}`, serves the app. Stdlib only. Skips a cycle below 8 API requests remaining. |
 | `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
-| `tray/fix-observatory-sni.py` | SNI StatusNotifierItem applet — the Omarchy chip in the quickshell bar tray; any click opens the swarm. Pure Gio, no appindicator. |
-| `tray/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
-| `bin/fix-everything-observatory` | Entrypoint: `open · mine · serve · tray · status · install`. |
+| `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. A click ensures the server and opens the swarm; the widget's one setting is the agent-allocation toggle. |
+| `bin/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
+| `bin/fix-everything-observatory` | Entrypoint: `open · mine · seed · serve · status · install`. |
+| `seed/manifest.js.gz` | A mined manifest, committed. The server hands it over under the live manifest's name until the first cycle finishes, so a fresh clone opens on a full swarm rather than a thirteen-minute empty one. 1.2MB gzipped; the page dates it and says what it is. Refresh it with `bin/fix-everything-observatory seed`. |
 | `contract/omarchy-fix-event-v1.md` | The event-marker pattern that makes a ticket definitively attributable to the one-click fixer. |
 | `docs/` | Research notes, decision records (0001 IA, 0002 smell + stats), QA pass. |
 
@@ -120,23 +157,28 @@ allowed to be the same grey dot.
 
 ```
 bin/fix-everything-observatory open      # ensure server, open the swarm
-bin/fix-everything-observatory install   # icons + desktop entry + start the tray
 bin/fix-everything-observatory status    # is it up? recent log
+bin/fix-everything-observatory seed      # freeze today's manifest as the committed seed
+bin/fix-everything-observatory install   # optional: desktop entry for app launchers
 ```
 
-Pin the tray icon so it's always visible (not in the hover drawer): in
-`~/.config/omarchy/shell.json`, the `omarchy.tray` entry under `bar.layout.right`:
+The first launch after a clone shows the whole swarm immediately, because one
+mined manifest ships in `seed/`. That picture is a real past, not this minute,
+and the page says so in yellow until the local miner's first cycle replaces it —
+about thirteen minutes with a token, since walking omarchy end to end is ~590
+conditional requests. A token-less cycle sees roughly two days of the repo and
+is refused rather than allowed to overwrite the seed with a worse picture: a
+slice may never replace a walk, whichever of the two arrived first.
+
+The bar presence is the plugin itself — `omarchy plugin enable
+brownfamilysports.observatory` if you cloned by hand instead of using `plugin
+add`. No autostart is needed: the chip starts the server on demand, and
 
 ```
-{ "id": "omarchy.tray", "pinned": ["fix-everything-observatory"] }
+omarchy-shell shell summon brownfamilysports.observatory
 ```
 
-Autostart on login (add to hyprland config by hand — config writes flash the
-CRT banner on this box):
-
-```
-exec-once = /home/parker/Work/fix-everything-observatory/bin/fix-everything-observatory tray
-```
+opens the swarm from a script or a Hyprland keybind.
 
 ## Coverage, and why a token decides what the numbers mean
 
