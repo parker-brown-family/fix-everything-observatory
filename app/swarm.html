@@ -91,6 +91,9 @@
     border:1px dashed var(--dim); padding:5px 8px; color:#9aa5ce; margin-top:6px; font-size:10.5px; line-height:1.45;
   }
   .err{color:var(--red);margin-top:6px;font-size:10.5px;word-break:break-all}
+  /* an unmeasured value. Never a 0, never a blank — a person has to be able to
+     see the difference between "we looked and it was none" and "nobody looked". */
+  .unk{color:var(--dim);border-bottom:1px dotted var(--dim);cursor:help;font-weight:300}
   .chip{display:inline-block;border:1px solid var(--dim);padding:1px 6px;margin:2px 3px 0 0;font-size:9.5px;color:var(--fg)}
   .chip.v{border-color:var(--violet);color:var(--violet)}
   .chip.c{border-color:var(--cyan);color:var(--cyan)}
@@ -240,6 +243,7 @@ const SPEEDS=[0.1,0.25,0.5,1,2,4]; let speedI=2, lastTs=0, anim=0;
 const REPLAY_SECONDS=60;  // wall-clock seconds for the replay cursor to cross the history
 let hover=null, mouse={x:-1,y:-1,px:0,py:0};
 let hits=[], AGG=null, pings=[], G=null;
+let fx=[], lastCrossT=null;   // transient event animations; wall-clock, capped
 let lastRailAt=0, lastFeedKey='', lastLiveT=0, hintGone=false;
 const tweens={};
 
@@ -261,7 +265,7 @@ function normalize(raw){
   const byNumber=new Map(arts.map(a=>[a.number,a]));
   const comments=(raw.comments||[]).map(c=>({
     kind:'comment',t:Date.parse(c.created_at),number:c.number,author:c.author||'?',
-    snippet:c.snippet||'',url:c.url,id:'c'+c.id,
+    snippet:c.snippet||null,url:c.url||null,id:'c'+c.id,   // null = not carried, not empty
   })).filter(c=>isFinite(c.t));
   const events=(raw.events||[]).map(e=>({
     kind:e.type,t:Date.parse(e.created_at),number:e.number,author:e.actor||'?',
@@ -274,7 +278,8 @@ function normalize(raw){
   const t0=arts.length?Math.min(...arts.map(a=>a.opened)):now-30*DAY;
   return {repo:raw.repo||'?',fetched:Date.parse(raw.fetched_at)||now,
     coverage:raw.coverage||{},error:raw.error||null,
-    artifacts:arts,byNumber,stream,reopened,t0,t1:now,sim:false};
+    artifacts:arts,byNumber,stream,reopened,reopens:events.filter(e=>e.kind==='reopened'),
+    t0,t1:now,sim:false};
 }
 
 const SIM_SNIPS=['reproduced on 3.1.2, the panel comes back after reload','patch works here, shipping it',
@@ -322,7 +327,8 @@ function simulate(){
   SIMDATA={repo:'simulation · 180 synthetic days',fetched:now,
     coverage:{complete:true,comments_complete:true,events_complete:true,fetched_count:arts.length},
     error:null,artifacts:arts,byNumber:new Map(arts.map(a=>[a.number,a])),
-    stream,reopened:new Set(arts.filter(a=>a.reopenedFlag).map(a=>a.number)),t0,t1:now,sim:true};
+    stream,reopened:new Set(arts.filter(a=>a.reopenedFlag).map(a=>a.number)),
+    reopens:stream.filter(s=>s.kind==='reopened'),t0,t1:now,sim:true};
 }
 
 function cur(){return SIM?SIMDATA:DATA}
@@ -333,14 +339,27 @@ function inScope(a){
   if(k==='agentic')return a.attribution!=='none';
   return a.attribution==='marker';
 }
-function visible(){const d=cur();return d?d.artifacts.filter(inScope):[]}
+/* Both of these are re-asked every animation frame and neither changes between
+   frames — at repo scale that is ~9k artifacts and ~40k stream rows refiltered
+   sixty times a second. Memoised on what actually varies. */
+let visCache={key:'',rows:[]}, streamCache={key:'',rows:[]};
+function cacheKey(d){return scopeKey()+'|'+(d.sim?'s':'l')+'|'+d.fetched+'|'+d.artifacts.length+'|'+d.stream.length}
+function visible(){
+  const d=cur(); if(!d)return [];
+  const key=cacheKey(d);
+  if(visCache.key!==key)visCache={key,rows:d.artifacts.filter(inScope)};
+  return visCache.rows;
+}
 function streamInScope(d){
-  const k=scopeKey();
-  return d.stream.filter(s=>{
+  const k=scopeKey(), key=cacheKey(d);
+  if(streamCache.key===key)return streamCache.rows;
+  const rows=d.stream.filter(s=>{
     const a=d.byNumber.get(s.number);
     if(!a)return k==='all';            // ticket outside fetched horizon
     return inScope(a);
   });
+  streamCache={key,rows};
+  return rows;
 }
 
 function loadManifest(first){
@@ -354,7 +373,7 @@ function loadManifest(first){
       if(!SIM&&prevLive&&DATA.stream.length){
         for(const it of DATA.stream)if(it.t>prevLive)pingItem(it);
       }
-      lastLiveT=Math.max(lastLiveT,...DATA.stream.map(i=>i.t),0);
+      for(const it of DATA.stream)if(it.t>lastLiveT)lastLiveT=it.t;   // no spread: 34k args is RangeError territory
       if(first||atEnd)T=DATA.t1;
       refresh();
     }
@@ -461,6 +480,26 @@ function syncOverlay(){
   } else ov.style.display='none';
 }
 
+/* ================= what the data may speak about =================
+   A window statistic is knowable only when the window sits entirely inside
+   what was fetched. Reaching past that edge returns null, never 0 — nobody
+   looked, and a zero there is an invented measurement indistinguishable from
+   a real one. The collapse to a dash happens here, at the renderer, where a
+   person can see it and argue with it. */
+function horizonOf(d,stream){
+  if(d.sim)return -Infinity;
+  const cov=d.coverage||{};
+  const done=stream==='artifacts'?cov.complete:stream==='comments'?cov.comments_complete:cov.events_complete;
+  if(done)return -Infinity;                       // walked to the end: it can speak about everything
+  const t=Date.parse(stream==='artifacts'?cov.oldest_fetched:stream==='comments'?cov.oldest_comment:cov.oldest_event);
+  return isFinite(t)?t:Infinity;                  // truncated, and we cannot say where → nothing is safe
+}
+function countBorn(rows,from,to,horizon){
+  return from>=horizon?rows.filter(a=>a.opened>from&&a.opened<=to).length:null;
+}
+const UNK='<span class="unk" title="not measured — this window reaches past the fetched horizon. Unknown is not zero.">—</span>';
+function num(v){return v==null?UNK:v}
+
 /* ================= right rail: metrics or inspector ================= */
 function renderRail(){
   if(sel){renderInspector();return}
@@ -473,8 +512,10 @@ function renderRail(){
   const mergedN=prsClosed.filter(a=>a.merged).length;
   const lives=closed.map(a=>a.closed-a.opened);
   const openAges=alive.map(a=>T-a.opened);
-  const b7=rows.filter(a=>a.opened>T-7*DAY&&a.opened<=T).length;
-  const b7p=rows.filter(a=>a.opened>T-14*DAY&&a.opened<=T-7*DAY).length;
+  const artH=horizonOf(d,'artifacts');
+  const b7=countBorn(rows,T-7*DAY,T,artH);
+  const b7p=countBorn(rows,T-14*DAY,T-7*DAY,artH);
+  const trend=(b7==null||b7p==null)?null:(b7<=b7p?'▼ quieter':'▲ louder');
   const attr={marker:0,smell:0,hint:0,none:0};
   for(const a of d.artifacts)attr[a.attribution]=(attr[a.attribution]||0)+1;
   const cov=d.coverage||{};
@@ -483,9 +524,9 @@ function renderRail(){
   <div class="big">${alive.length}<small>alive at cursor</small></div>
   <div class="kv"><span>issues / PRs in scope</span><b>${rows.length-prs.length} / ${prs.length}</b></div>
   <h3>VOLUME</h3>
-  <div class="kv"><span>born, last 7d of cursor</span><b class="r">${b7}</b></div>
-  <div class="kv"><span>born, prior 7d</span><b>${b7p}</b></div>
-  <div class="kv"><span>trend</span><b class="${b7<=b7p?'g':'r'}">${b7p||b7?(b7<=b7p?'▼ quieter':'▲ louder'):'—'}</b></div>
+  <div class="kv"><span>born, last 7d of cursor</span><b class="${b7==null?'':'r'}">${num(b7)}</b></div>
+  <div class="kv"><span>born, prior 7d</span><b>${num(b7p)}</b></div>
+  <div class="kv"><span>trend</span><b class="${trend==null?'':trend[0]==='▼'?'g':'r'}">${trend??'<span class="unk" title="refused — one side of this comparison is older than the fetched horizon, so the arrow would be reporting a hole as a number">not looked</span>'}</b></div>
   <h3>LIFESPAN</h3>
   <div class="kv"><span>median, settled</span><b class="c">${fmtDur(quantile(lives,0.5))}</b></div>
   <div class="kv"><span>p90, settled</span><b>${fmtDur(quantile(lives,0.9))}</b></div>
@@ -495,18 +536,24 @@ function renderRail(){
   <div class="kv"><span>merged, of settled PRs</span><b class="g">${pct(mergedN,prsClosed.length)}</b></div>
   <div class="kv"><span>closed not-planned</span><b>${pct(closed.filter(a=>a.not_planned).length,closed.length)}</b></div>
   <div class="kv"><span>reopened, in window</span><b class="${d.reopened.size?'r':''}">${d.reopened.size}</b></div>
+  ${artH>-Infinity?`<div class="fogchip">lifespan and closeability are measured over the fetched slice only — the population before ${esc(String(cov.oldest_fetched||'?').slice(0,10))} was never looked at.</div>`:''}
   <h3>ATTRIBUTION · ALL FETCHED</h3>
   <div class="kv"><span>marker (the pattern)</span><b class="c">${attr.marker}</b></div>
   <div class="kv"><span>agent smell (score ≥ 2)</span><b class="v">${attr.smell}</b></div>
   <div class="kv"><span>hint (one weak signal)</span><b class="y">${attr.hint}</b></div>
   <div class="kv"><span>no signal</span><b>${attr.none}</b></div>
   <h3>COVERAGE</h3>
-  <div class="kv"><span>artifacts fetched</span><b>${cov.fetched_count??d.artifacts.length}</b></div>
+  <div class="kv"><span>artifacts fetched</span><b class="${cov.complete?'g':'y'}">${cov.fetched_count??d.artifacts.length}${cov.complete?' · all':''}</b></div>
+  <div class="kv"><span>open in manifest</span><b>${d.artifacts.filter(a=>!a.closed).length}</b></div>
   <div class="kv"><span>repo reports open</span><b>${cov.repo_open_issues??'—'}</b></div>
   <div class="kv"><span>comments / events</span><b>${d.stream.filter(s=>s.kind==='comment').length} / ${d.stream.filter(s=>s.kind!=='comment').length}</b></div>
+  <div class="kv"><span>pages walked</span><b>${[cov.issue_pages,cov.comment_pages,cov.event_pages].map(x=>x??'?').join(' / ')}</b></div>
   <div class="kv"><span>api budget</span><b>${cov.api?`${cov.api.remaining}/${cov.api.limit}`:'—'}</b></div>
   ${cov.complete||SIM?'':`<div class="fogchip">history older than ${cov.oldest_fetched?esc(String(cov.oldest_fetched).slice(0,10)):'?'} NOT INSPECTED — newest ${cov.issue_pages??'?'}×100 fetched${cov.authenticated?'':' (set GITHUB_TOKEN to raise the horizon)'}.</div>`}
   ${!SIM&&cov.comments_complete===false?`<div class="fogchip">comments older than ${cov.oldest_comment?esc(String(cov.oldest_comment).slice(0,10)):'?'} not fetched — absence below is not silence.</div>`:''}
+  ${!SIM&&cov.complete?`<div class="fogchip" style="border-style:solid;border-color:var(--green);background:none;color:var(--green)">every issue and PR since ${esc(String(cov.repo_created_at||'').slice(0,10))} walked to the end — this is the repo, not a window.</div>`:''}
+  ${!SIM&&cov.events_capped?`<div class="fogchip">GitHub stops paginating events at ${cov.event_pages??300} pages, so state changes only reach back to ${cov.oldest_event?esc(String(cov.oldest_event).slice(0,10)):'?'} — a ceiling, not the end of the stream. Ticks left of it are missing, not absent.</div>`:''}
+  ${!SIM&&cov.snippets_from&&Date.parse(cov.snippets_from)>d.t0+DAY?`<div class="fogchip">comment text is carried from ${esc(String(cov.snippets_from).slice(0,10))} on; older comments are counted and timed, their words are not stored.</div>`:''}
   ${d.error?`<div class="err">miner: ${esc(d.error)}</div>`:''}`;
 }
 
@@ -514,7 +561,7 @@ function storyOf(d,a){
   const ev=[{t:a.opened,cls:'opened',html:`<span class="who">@${esc(a.author)}</span>${a.bot?' <span class="chip v">bot</span>':''} opened this ${a.kind}`}];
   for(const s of d.stream){
     if(s.number!==a.number)continue;
-    if(s.kind==='comment')ev.push({t:s.t,cls:'comment',html:`<span class="who">@${esc(s.author)}</span> commented<span class="snip">“${esc(s.snippet.slice(0,110))}${s.snippet.length>110?'…':''}”</span>`});
+    if(s.kind==='comment')ev.push({t:s.t,cls:'comment',html:`<span class="who">@${esc(s.author)}</span> commented${s.snippet?`<span class="snip">“${esc(s.snippet.slice(0,110))}${s.snippet.length>110?'…':''}”</span>`:`<span class="snip unk" title="the comment happened and is counted; its text was not carried into the manifest">text not stored</span>`}`});
     else if(s.kind==='reopened')ev.push({t:s.t,cls:'reopened',html:`<b style="color:var(--red)">reopened</b> by <span class="who">@${esc(s.author)}</span>`});
     else if(s.kind==='labeled')ev.push({t:s.t,cls:'labeled',html:`labeled <span class="chip">${esc(s.label||'?')}</span>`});
     else if(s.kind==='referenced')ev.push({t:s.t,cls:'labeled',html:`referenced from a commit`});
@@ -532,8 +579,11 @@ function renderInspector(){
   if(!a){sel=null;renderRail();return}
   const state=a.closed?(a.merged?'merged':'closed'):'open';
   const story=storyOf(d,a);
-  const fogNote=(!SIM&&d.coverage.comments_complete===false&&d.coverage.oldest_comment&&a.opened<Date.parse(d.coverage.oldest_comment))
-    ?`<div class="fogchip">activity before ${esc(String(d.coverage.oldest_comment).slice(0,10))} is outside the fetched window — this story may be missing its beginning.</div>`:'';
+  const cov=d.coverage||{};
+  const fogNote=(!SIM&&cov.comments_complete===false&&cov.oldest_comment&&a.opened<Date.parse(cov.oldest_comment))
+    ?`<div class="fogchip">activity before ${esc(String(cov.oldest_comment).slice(0,10))} is outside the fetched window — this story may be missing its beginning.</div>`
+    :(!SIM&&cov.snippets_from&&a.opened<Date.parse(cov.snippets_from))
+    ?`<div class="fogchip">this ticket predates the stored comment text — the events are complete, the words are not.</div>`:'';
   rail.innerHTML=`
   <div id="insphead">
     <span class="num">#${a.number}</span>
@@ -562,6 +612,10 @@ function renderInspector(){
 function pingItem(it){
   const d=cur();if(!d||!G)return;
   const a=d.byNumber.get(it.number);
+  // births/deaths/resurrections animate from the cursor CROSSING them (the
+  // reload advances T to the new now, so live ones fire there) — doing it here
+  // too made every live state change flash twice
+  if(a&&(it.kind==='closed'||it.kind==='merged'||it.kind==='reopened'))return;
   let x,y;
   if(a&&a.opened<=T&&(!a.closed||a.closed>T)){const p=posOf(a,G.zone,anim);x=p.x;y=p.y}
   else {x=G.xOf?G.xOf(Math.min(it.t,cur().t1)):G.W/2;y=G.lane?G.lane.y+G.lane.h/2:G.H-160}
@@ -581,7 +635,7 @@ function renderFeed(){
   box.innerHTML=show.map(s=>{
     const known=d.byNumber.has(s.number);
     const txt=s.kind==='comment'
-      ?`@${esc(s.author)} → #${s.number} “${esc(s.snippet.slice(0,64))}${s.snippet.length>64?'…':''}”`
+      ?`@${esc(s.author)} → #${s.number} ${s.snippet?`“${esc(s.snippet.slice(0,64))}${s.snippet.length>64?'…':''}”`:`<span class="unk">commented · text not stored</span>`}`
       :s.kind==='labeled'?`#${s.number} labeled ${esc(s.label||'?')}`
       :`#${s.number} ${esc(s.kind.replace(/_/g,' '))} · @${esc(s.author)}`;
     const when=SIM||T<d.t1-1500?fmtClockT(s.t):fmtRel(Date.now()-s.t);
@@ -601,7 +655,34 @@ function sizeCanvas(){
   const w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);
   if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h}
   cx.setTransform(dpr,0,0,dpr,0,0);
-  return {W:r.width,H:r.height};
+  return {W:r.width,H:r.height,dpr};
+}
+
+/* One mote costs a save, a shadow, a path and a fill. Three thousand of them,
+   several hundred carrying a gaussian glow, is a slideshow. Every distinct look
+   is rasterised once at device resolution and blitted thereafter — the radius is
+   bucketed to a half pixel, which collapses the whole swarm to a few dozen. */
+const SPRITES=new Map();
+function moteSprite(col,attribution,isPR,r,reo,dpr){
+  const key=col+'|'+attribution+'|'+isPR+'|'+r+'|'+reo+'|'+dpr;
+  let sp=SPRITES.get(key);
+  if(sp)return sp;
+  const blur=attribution==='none'?0:attribution==='smell'?12:9;
+  const half=Math.ceil(r+(reo?4:0)+blur+2);
+  const off=document.createElement('canvas');
+  off.width=off.height=Math.ceil(half*2*dpr);
+  const g=off.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+  g.translate(half,half);
+  if(blur){g.shadowColor=col;g.shadowBlur=blur}
+  g.fillStyle=col;
+  if(isPR){const q=r+1.4;g.beginPath();g.moveTo(0,-q);g.lineTo(q,0);g.lineTo(0,q);g.lineTo(-q,0);g.closePath();g.fill()}
+  else{g.beginPath();g.arc(0,0,r,0,7);g.fill()}
+  g.shadowBlur=0;
+  if(reo){g.strokeStyle=COL.red;g.lineWidth=1;g.beginPath();g.arc(0,0,r+3,0,7);g.stroke()}
+  sp={cv:off,half,size:half*2};
+  SPRITES.set(key,sp);
+  return sp;
 }
 function hatch(x,y,w,h){
   cx.save();cx.beginPath();cx.rect(x,y,w,h);cx.clip();
@@ -624,6 +705,42 @@ function posOf(a,zone,motion){
   const ang=s.a0+w*motion,wob=Math.sin(motion*0.4+s.ph)*4;
   return {x:zone.cx+Math.cos(ang)*(r+wob)*1.45,y:zone.cy+Math.sin(ang)*(r+wob)*0.75};
 }
+/* ---- event fx: a birth flares, a death implodes, a resurrection shockwaves.
+   Spawned when the cursor CROSSES an event, in either direction, so the replay
+   sputters with sparks and a live tick flares the moment the feed learns of it.
+   Wall-clock timed (they are feedback, not simulation), and capped: a scrub
+   flung across fifteen months samples the burst instead of flashbanging. */
+function spawnFx(kind,a,zone,col,big){
+  const q=posOf(a,zone,anim);
+  const R=rng((a.number*40503)>>>0);
+  fx.push({kind,x:q.x,y:q.y,col,big:!!big,a0:R()*6.283,
+    start:performance.now(),dur:kind==='reopen'?900:kind==='death'?550:650});
+}
+function spawnCrossings(d,zone){
+  if(lastCrossT===null||T===lastCrossT){lastCrossT=T;return}
+  const lo=Math.min(lastCrossT,T),hi=Math.max(lastCrossT,T);lastCrossT=T;
+  if(fx.length>400)return;                    // a storm is already on screen
+  const births=[],deaths=[];
+  for(const a of d.artifacts){
+    if(!inScope(a))continue;
+    if(a.opened>lo&&a.opened<=hi)births.push(a);
+    if(a.closed&&a.closed>lo&&a.closed<=hi)deaths.push(a);
+  }
+  const reo=(d.reopens||[]).filter(e=>e.t>lo&&e.t<=hi);
+  const cap=150,sample=arr=>arr.length<=cap?arr:arr.filter((_,i)=>i%Math.ceil(arr.length/cap)===0);
+  for(const a of sample(births)){
+    const agent=a.attribution==='smell'||a.attribution==='marker';
+    // provenance is the colour: agents violet/cyan (and showier), hints yellow,
+    // people blue — never the dull ghost, a birth is an event whoever caused it
+    spawnFx('birth',a,zone,a.attribution==='none'?COL.blue:attrColor(a),agent);
+  }
+  for(const a of sample(deaths))
+    spawnFx('death',a,zone,a.merged?COL.green:a.not_planned?COL.dim:COL.ghost);
+  for(const e of sample(reo)){
+    const a=d.byNumber.get(e.number);
+    if(a&&inScope(a))spawnFx('reopen',a,zone,COL.red);
+  }
+}
 function attrColor(a){
   return a.attribution==='marker'?COL.cyan
     :a.attribution==='smell'?COL.violet
@@ -631,7 +748,7 @@ function attrColor(a){
 }
 
 function draw(ts){
-  const {W,H}=sizeCanvas();
+  const {W,H,dpr}=sizeCanvas();
   const dt=lastTs?Math.min(120,ts-lastTs):16; lastTs=ts;
   anim+=(dt/1000)*SPEEDS[speedI];   // motion clock — the only thing the speed knob scales
   const cfd={x:0,y:H-132,w:W,h:132};
@@ -658,6 +775,7 @@ function draw(ts){
     const mL=14,mR=14,usable=W-mL-mR-fog;
     const xOf=t=>mL+fog+((t-d.t0)/(d.t1-d.t0))*usable;
     G={W,H,zone,lane,cfd,fog,xOf};
+    spawnCrossings(d,zone);
 
     /* age rings */
     cx.setLineDash([2,5]);cx.strokeStyle='rgba(65,72,104,0.55)';cx.lineWidth=1;
@@ -682,35 +800,46 @@ function draw(ts){
     for(const a of rows){
       if(a.opened>T||(a.closed&&a.closed<=T))continue;
       const p=posOf(a,zone,anim);
-      const col=attrColor(a);
-      const r=2.2+Math.min(3,a.comments*0.35);
-      cx.save();
-      if(a.attribution!=='none'){cx.shadowColor=col;cx.shadowBlur=a.attribution==='smell'?12:9}
-      cx.fillStyle=col;
-      if(a.kind==='pr'){diamond(p.x,p.y,r+1.4);cx.fill()}
-      else{cx.beginPath();cx.arc(p.x,p.y,r,0,7);cx.fill()}
-      cx.restore();
-      if(d.reopened.has(a.number)){cx.strokeStyle=COL.red;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+3,0,7);cx.stroke()}
+      const r=Math.round((2.2+Math.min(3,a.comments*0.35))*2)/2;
+      const sp=moteSprite(attrColor(a),a.attribution,a.kind==='pr',r,d.reopened.has(a.number),dpr);
+      cx.drawImage(sp.cv,Math.round(p.x-sp.half),Math.round(p.y-sp.half),sp.size,sp.size);
       if(sel===a.number){cx.strokeStyle=COL.white;cx.lineWidth=1.2;cx.beginPath();cx.arc(p.x,p.y,r+5.5,0,7);cx.stroke()}
       else if(hover&&hover.a===a){cx.strokeStyle=COL.white;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+5,0,7);cx.stroke()}
       hits.push({x:p.x,y:p.y,a});
     }
 
-    /* event lane: ticks by time */
+    /* event lane: ticks by time. Forty thousand of them, so they are collected
+       into one Path2D per style and submitted a dozen times, not forty thousand. */
     const items=streamInScope(d);
+    const lanePaths=new Map(), drawnCols=new Set();
     for(const s of items){
-      const x=xOf(s.t);
+      const x=Math.round(xOf(s.t));
       if(x<mL+fog-1||x>W-mR+1)continue;
       const past=s.t<=T;
-      if(s.kind==='comment'){
-        cx.strokeStyle=past?'rgba(125,207,255,0.8)':'rgba(125,207,255,0.22)';
-        cx.beginPath();cx.moveTo(x,lane.y+4);cx.lineTo(x,lane.y+12);cx.stroke();
-      } else {
-        const col=s.kind==='merged'?COL.green:s.kind==='reopened'?COL.red:s.kind==='closed'?COL.ghost:COL.dim;
-        cx.strokeStyle=past?col:'rgba(65,72,104,0.3)';cx.lineWidth=s.kind==='reopened'?2:1.4;
-        cx.beginPath();cx.moveTo(x,lane.y+13);cx.lineTo(x,lane.y+23);cx.stroke();cx.lineWidth=1;
-      }
+      const style=s.kind==='comment'?(past?'cp':'cf')
+        :(past?'p:':'f:')+(s.kind==='merged'?'merged':s.kind==='reopened'?'reopened':s.kind==='closed'?'closed':'other');
+      // thirty thousand ticks land on ~750 pixel columns; a column already
+      // drawn in a style has nothing left to say in it
+      const colKey=style+x;
+      if(drawnCols.has(colKey))continue;
+      drawnCols.add(colKey);
+      let q=lanePaths.get(style);
+      if(!q){q=new Path2D();lanePaths.set(style,q)}
+      if(s.kind==='comment'){q.moveTo(x,lane.y+4);q.lineTo(x,lane.y+12)}
+      else{q.moveTo(x,lane.y+13);q.lineTo(x,lane.y+23)}
     }
+    for(const [style,q] of lanePaths){
+      if(style==='cp'||style==='cf'){
+        cx.strokeStyle=style==='cp'?'rgba(125,207,255,0.8)':'rgba(125,207,255,0.22)';cx.lineWidth=1;
+      } else {
+        const past=style[0]==='p',kind=style.slice(2);
+        cx.strokeStyle=past?(kind==='merged'?COL.green:kind==='reopened'?COL.red:kind==='closed'?COL.ghost:COL.dim)
+          :'rgba(65,72,104,0.3)';
+        cx.lineWidth=kind==='reopened'?2:1.4;
+      }
+      cx.stroke(q);
+    }
+    cx.lineWidth=1;
     cx.fillStyle=COL.ghost;cx.font='8.5px JetBrains Mono,monospace';cx.textAlign='left';
     cx.fillText('COMMENTS',mL+fog+2,lane.y+11);
     cx.fillText('STATE CHANGES',mL+fog+2,lane.y+23);
@@ -764,6 +893,42 @@ function draw(ts){
       cx.beginPath();cx.arc(p.x,p.y,4+k*26,0,7);cx.stroke();cx.globalAlpha=1;
     }
 
+    /* event fx layer — additive, so overlapping sparks bloom instead of mud */
+    if(fx.length){
+      fx=fx.filter(f=>now-f.start<f.dur);
+      cx.save();cx.globalCompositeOperation='lighter';
+      for(const f of fx){
+        const k=(now-f.start)/f.dur,e=1-Math.pow(1-k,3),out=1-k;
+        if(f.kind==='birth'){
+          cx.globalAlpha=out;
+          cx.fillStyle=f.col;cx.beginPath();cx.arc(f.x,f.y,1.5+e*2.5,0,7);cx.fill();
+          cx.strokeStyle=f.col;cx.lineWidth=1;
+          cx.beginPath();cx.arc(f.x,f.y,2+e*13,0,7);cx.stroke();
+          if(f.big){cx.globalAlpha=out*0.5;cx.beginPath();cx.arc(f.x,f.y,2+e*20,0,7);cx.stroke();cx.globalAlpha=out}
+          cx.beginPath();
+          for(let i=0;i<5;i++){const ra=f.a0+i*1.2566,r1=3+e*6,r2=3+e*(11+(f.big?5:0));
+            cx.moveTo(f.x+Math.cos(ra)*r1,f.y+Math.sin(ra)*r1);
+            cx.lineTo(f.x+Math.cos(ra)*r2,f.y+Math.sin(ra)*r2);}
+          cx.stroke();
+        } else if(f.kind==='death'){
+          cx.globalAlpha=out*0.9;
+          cx.strokeStyle=f.col;cx.lineWidth=1.2;
+          cx.beginPath();cx.arc(f.x,f.y,1+(1-e)*11,0,7);cx.stroke();
+          cx.globalAlpha=out*0.7;
+          cx.fillStyle=f.col;cx.beginPath();cx.arc(f.x,f.y,2.4*(1-e),0,7);cx.fill();
+        } else {
+          cx.globalAlpha=out;
+          cx.strokeStyle=COL.red;cx.lineWidth=1.5;
+          cx.beginPath();cx.arc(f.x,f.y,2+e*26,0,7);cx.stroke();
+          cx.lineWidth=1;cx.globalAlpha=out*0.6;
+          cx.beginPath();cx.arc(f.x,f.y,2+e*17,0,7);cx.stroke();
+          cx.globalAlpha=out*0.8;cx.fillStyle=COL.red;
+          cx.beginPath();cx.arc(f.x,f.y,1.6+out*1.8,0,7);cx.fill();
+        }
+      }
+      cx.globalAlpha=1;cx.restore();
+    }
+
     /* SIMULATED watermark */
     if(SIM){
       cx.save();cx.translate(W/2,zone.h/2);cx.rotate(-0.18);
@@ -804,6 +969,7 @@ function draw(ts){
 function setPlaying(v){playing=v;$('#playBtn').textContent=v?'⏸ PAUSE':'▶ REPLAY'}
 function setSim(v){
   SIM=v;
+  fx=[];lastCrossT=null;
   if(SIM&&!SIMDATA)simulate();
   const b=$('#modeBtn');b.textContent=SIM?'SIM':'LIVE';b.classList.toggle('sim',SIM);
   sel=null;lastFeedKey='';

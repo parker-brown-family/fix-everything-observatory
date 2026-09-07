@@ -6,6 +6,18 @@ PORT="${FIX_TRACKER_PORT:-4517}"
 URL="http://127.0.0.1:${PORT}/app/swarm.html"
 mkdir -p "$ROOT/data"
 
+# The horizon is a token. Unauthenticated, GitHub allows 60 requests an hour —
+# three pages, two days of a repo with fifteen months of history. Authenticated
+# it is 5,000, which walks the whole thing. Borrow gh's rather than ask anyone
+# to paste a secret into a file; if gh has none, the miner still runs and the
+# manifest records that what it saw was a slice.
+if [ -z "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+  if tok="$(gh auth token 2>/dev/null)" && [ -n "$tok" ]; then
+    export GITHUB_TOKEN="$tok"
+  fi
+  unset tok
+fi
+
 up() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null && { exec 3>&- 3<&-; return 0; } || return 1; }
 
 ensure_server() {

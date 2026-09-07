@@ -97,9 +97,38 @@ CRT banner on this box):
 exec-once = /home/parker/Work/fix-everything-tracker/bin/fix-everything-tracker tray
 ```
 
+## Coverage, and why a token decides what the numbers mean
+
+Unauthenticated, GitHub allows 60 requests an hour. That buys three pages —
+300 artifacts, which on omarchy is about **two days** of a repo with fifteen
+months of history. Authenticated it is 5,000, and the miner walks every stream
+to its end by following the `Link: rel="next"` cursor: ~89 pages of issues and
+PRs, ~198 of comments, ~300 of events. The launcher borrows a token from `gh`
+automatically, so the normal path is the complete one.
+
+The distinction is load-bearing, because a truncated stream and an exhausted
+one produce the same shape of number and mean opposite things. Fetch the newest
+300 issues and `born, prior 7d` reads **0** — not because nothing was born, but
+because nobody looked, and the trend arrow beside it then computes `300 > 0` and
+says the repo is getting louder. That is an invented measurement that looks
+exactly like a real one.
+
+So every window statistic checks the horizon of the stream it reads. A window
+reaching past what was fetched renders as a dotted **—**, never a zero, and the
+trend refuses to compute rather than compare against a hole. `coverage` in the
+manifest records per stream whether it was walked to the end, how many pages it
+took, and the oldest thing it saw.
+
+Comments are a partial exception, declared as one: all of them ship as ticks so
+the lane is honest across the whole span, but only the newest 1,500 carry their
+text — twenty thousand snippets is ~7MB the browser would re-parse on every
+load. An older comment renders as “text not stored”, which is not the same
+claim as an empty comment.
+
 Env: `FIX_TRACKER_REPO` (default `omacom/omarchy`), `FIX_TRACKER_PORT` (4517),
-`FIX_TRACKER_PAGES`, `FIX_TRACKER_INTERVAL` (300s), `GITHUB_TOKEN` (raises the
-fetch horizon 3→10 pages and the rate budget).
+`FIX_TRACKER_INTERVAL` (900s with a token, 300s without), `FIX_TRACKER_MAX_PAGES`
+(safety cap on a walk), `FIX_TRACKER_SNIPPETS` (1500), `GITHUB_TOKEN` / `GH_TOKEN`
+(the difference between a slice and the repo).
 
 ## Toward wecanfixeverything.com
 

@@ -11,7 +11,9 @@ Doctrine:
 - Unknown is never zero: coverage gaps, rate budget, and horizon are recorded.
 - All requests are conditional (ETags); 304s are free against the rate limit.
 
-Stdlib only. GITHUB_TOKEN / GH_TOKEN raises the pagination horizon.
+Stdlib only. With GITHUB_TOKEN / GH_TOKEN every stream is walked to its end;
+without one the 60/hour ceiling allows only the newest few pages, and the
+manifest says so rather than letting the shortfall read as an empty repo.
 """
 from __future__ import annotations
 
@@ -34,10 +36,28 @@ CACHE_PATH = DATA / "http-cache.json"
 REPO = os.environ.get("FIX_TRACKER_REPO", "omacom/omarchy")
 PORT = int(os.environ.get("FIX_TRACKER_PORT", "4517"))
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-ISSUE_PAGES = int(os.environ.get("FIX_TRACKER_PAGES", "10" if TOKEN else "3"))
-COMMENT_PAGES = 3 if TOKEN else 2
-EVENT_PAGES = 3 if TOKEN else 2
-INTERVAL = int(os.environ.get("FIX_TRACKER_INTERVAL", "300"))
+# Authenticated we get 5,000 requests an hour, which is enough to walk every
+# stream to its end (~600 pages for omarchy) — so we do, and order ascending
+# because then the cursors and the ETags of everything but the last page are
+# stable and later cycles cost nothing. Unauthenticated, 60/hour makes that
+# impossible; we take the NEWEST pages instead and record the truncation.
+COMPLETE = bool(TOKEN)
+ORDER = "asc" if COMPLETE else "desc"
+MAX_PAGES = int(os.environ.get("FIX_TRACKER_MAX_PAGES", "1500" if TOKEN else "3"))
+# Every comment ships as a tick so the event lane is honest across the whole
+# span; only the newest carry their text, because 20k snippets is ~7MB the
+# browser would re-parse on every load.
+SNIPPET_KEEP = int(os.environ.get("FIX_TRACKER_SNIPPETS", "1500"))
+# GitHub stops paginating /issues/events at 300 pages and simply withholds the
+# next link. Walking to "no next link" there reaches the CAP, not the end of the
+# stream, and the difference is measurable: omarchy's events then begin in
+# October 2025 for a repo whose issues begin in June. Reaching a documented
+# ceiling is not the same finding as exhausting a stream, so we do not record it
+# as one.
+EVENT_PAGE_CAP = 300
+# An exhaustive cycle is ~600 conditional round trips. They cost nothing against
+# the rate limit (a 304 is free) but they cost wall clock, so it beats slower.
+INTERVAL = int(os.environ.get("FIX_TRACKER_INTERVAL", "900" if TOKEN else "300"))
 MIN_BUDGET = 8  # skip a cycle rather than spend the last requests
 
 MARKER_RE = re.compile(r"<!--\s*omarchy-fix-event:v(\d+)\s*(.*?)-->", re.S)
@@ -112,10 +132,17 @@ _cache: dict = {}
 RATE: dict = {}
 
 
+# Cached bodies are DISTILLED rows, not GitHub's. Raw, the ~600 pages of a whole
+# repo are ~150MB rewritten every cycle; the fields we keep are ~14MB. Bump this
+# whenever a row shape changes, or a 304 will serve a body of the old shape.
+CACHE_VERSION = 2
+
+
 def load_cache() -> None:
     global _cache
     try:
-        _cache = json.loads(CACHE_PATH.read_text())
+        blob = json.loads(CACHE_PATH.read_text())
+        _cache = blob["entries"] if blob.get("v") == CACHE_VERSION else {}
     except Exception:
         _cache = {}
 
@@ -123,7 +150,7 @@ def load_cache() -> None:
 def save_cache() -> None:
     try:
         DATA.mkdir(exist_ok=True)
-        CACHE_PATH.write_text(json.dumps(_cache))
+        CACHE_PATH.write_text(json.dumps({"v": CACHE_VERSION, "entries": _cache}))
     except Exception as exc:
         log(f"cache save failed: {exc}")
 
@@ -138,8 +165,20 @@ def _note_rate(headers) -> None:
                 "reset": int(res or 0)}
 
 
-def api(path: str):
-    """Conditional GET against api.github.com; 304 serves the cached body."""
+LINK_NEXT_RE = re.compile(r'<https://api\.github\.com([^>]+)>;\s*rel="next"')
+
+
+def api_page(path: str, row_fn=None):
+    """Conditional GET; returns (body, next_path or None). 304 serves the cache.
+
+    The next page comes from the server's own Link header, not from an
+    incremented page number: these endpoints have moved to opaque cursors, and
+    following the link is the only way to reach the end of one.
+
+    `row_fn` distils each row before it is cached — a row that returns None is
+    dropped. Nothing downstream ever sees GitHub's full objects, which is what
+    keeps a whole-repo cache in megabytes rather than hundreds of them.
+    """
     headers = {
         "User-Agent": "fix-everything-tracker/2.0 (+https://wecanfixeverything.com)",
         "Accept": "application/vnd.github+json",
@@ -153,14 +192,25 @@ def api(path: str):
         with urlopen(Request("https://api.github.com" + path, headers=headers),
                      timeout=30) as res:
             _note_rate(res.headers)
-            body = json.load(res)
-            _cache[path] = {"etag": res.headers.get("ETag"), "body": body}
-            return body
+            raw = json.load(res)
+            body = raw if row_fn is None else [
+                x for x in (row_fn(r) for r in raw) if x is not None]
+            m = LINK_NEXT_RE.search(res.headers.get("Link") or "")
+            nxt = m.group(1) if m else None
+            _cache[path] = {"etag": res.headers.get("ETag"), "body": body,
+                            "next": nxt}
+            return body, nxt
     except HTTPError as e:
         if e.code == 304 and ent:
             _note_rate(e.headers)
-            return ent["body"]
+            m = LINK_NEXT_RE.search(e.headers.get("Link") or "")
+            return ent["body"], (m.group(1) if m else ent.get("next"))
         raise
+
+
+def api(path: str):
+    """One object, no pagination."""
+    return api_page(path)[0]
 
 
 def budget_low() -> bool:
@@ -172,22 +222,36 @@ def budget_low() -> bool:
 
 
 # ---- mining ------------------------------------------------------------------
-def fetch_pages(path_tpl: str, pages: int):
-    rows, complete, err = [], False, None
-    for page in range(1, pages + 1):
+def fetch_all(path: str, row_fn=None, cap: int = MAX_PAGES):
+    """Walk a list endpoint to its end, or until `cap` pages / the rate budget.
+
+    Returns (rows, complete, err, pages). `complete` is true ONLY when the
+    server offered no next page. A cap, an error or a budget stop leaves it
+    false, because a truncated stream and an exhausted one are not the same
+    finding, and every statistic downstream depends on telling them apart.
+    """
+    rows, complete, err, pages = [], False, None, 0
+    while path and pages < cap:
+        if pages and budget_low():
+            err = err or f"rate budget spent after {pages} pages"
+            break
         try:
-            batch = api(path_tpl.format(page=page))
+            batch, nxt = api_page(path, row_fn)
         except (HTTPError, URLError, OSError) as exc:
-            err = f"{path_tpl.format(page=page)}: {exc}"
+            err = f"{path}: {exc}"
             break
-        if not batch:
+        pages += 1
+        rows.extend(batch or [])
+        # The end of a stream is the server withholding a next link, and nothing
+        # else. An empty page is NOT the end: row_fn drops what we do not keep,
+        # and a page of events that are all "subscribed" distils to nothing while
+        # three hundred pages still wait behind it. That mistake cost the event
+        # stream 293 of its 300 pages and reported complete=True over the hole.
+        if not nxt:
             complete = True
             break
-        rows.extend(batch)
-        if len(batch) < 100:
-            complete = True
-            break
-    return rows, complete, err
+        path = nxt
+    return rows, complete, err, pages
 
 
 def classify(marker, smell) -> str:
@@ -212,6 +276,64 @@ def clean_snippet(text: str, n: int = 220) -> str:
     return text[:n]
 
 
+KEEP_EVENTS = {"closed", "reopened", "merged", "labeled", "referenced",
+               "ready_for_review", "review_requested"}
+
+
+def issue_row(r):
+    pr = r.get("pull_request")
+    marker = parse_marker(r.get("body"))
+    smell = smell_of(r)
+    user = r.get("user") or {}
+    return {
+        "kind": "pr" if pr is not None else "issue",
+        "number": r.get("number"),
+        "title": r.get("title"),
+        "url": r.get("html_url"),
+        "author": user.get("login"),
+        "author_is_bot": is_bot(user),
+        "opened_at": r.get("created_at"),
+        "closed_at": r.get("closed_at"),          # null while open — never zero
+        "merged_at": (pr or {}).get("merged_at"),  # null = unmerged OR not a PR
+        "state": r.get("state"),
+        "state_reason": r.get("state_reason"),
+        "labels": [l.get("name") for l in r.get("labels") or []],
+        "comments": r.get("comments"),
+        "attribution": classify(marker, smell),
+        "smell": smell,
+        "marker": marker,
+    }
+
+
+def comment_row(c):
+    n = issue_number_of(c)
+    if n is None:
+        return None
+    cu = c.get("user") or {}
+    return {
+        "id": c.get("id"), "number": n,
+        "author": cu.get("login"), "author_is_bot": is_bot(cu),
+        "created_at": c.get("created_at"),
+        "snippet": clean_snippet(c.get("body")),
+        "url": c.get("html_url"),
+    }
+
+
+def event_row(e):
+    if e.get("event") not in KEEP_EVENTS:
+        return None
+    issue = e.get("issue") or {}
+    if issue.get("number") is None:
+        return None
+    return {
+        "id": e.get("id"), "type": e.get("event"),
+        "number": issue.get("number"),
+        "actor": (e.get("actor") or {}).get("login"),
+        "created_at": e.get("created_at"),
+        "label": (e.get("label") or {}).get("name"),
+    }
+
+
 def mine_once() -> None:
     if budget_low():
         reset = datetime.fromtimestamp(RATE.get("reset", 0), timezone.utc)
@@ -219,15 +341,19 @@ def mine_once() -> None:
             f"resets {reset.isoformat(timespec='minutes')}")
         return
 
-    issues, issues_complete, err = fetch_pages(
-        f"/repos/{REPO}/issues?state=all&sort=created&direction=desc"
-        "&per_page=100&page={page}", ISSUE_PAGES)
-    comments_raw, comments_complete, c_err = fetch_pages(
-        f"/repos/{REPO}/issues/comments?sort=created&direction=desc"
-        "&per_page=100&page={page}", COMMENT_PAGES)
-    events_raw, events_complete, e_err = fetch_pages(
-        f"/repos/{REPO}/issues/events?per_page=100&page={{page}}", EVENT_PAGES)
+    arts, issues_complete, err, issue_pages = fetch_all(
+        f"/repos/{REPO}/issues?state=all&sort=created&direction={ORDER}"
+        "&per_page=100", issue_row)
+    comments, comments_complete, c_err, comment_pages = fetch_all(
+        f"/repos/{REPO}/issues/comments?sort=created&direction={ORDER}"
+        "&per_page=100", comment_row)
+    events, events_complete, e_err, event_pages = fetch_all(
+        f"/repos/{REPO}/issues/events?per_page=100", event_row)
     err = err or c_err or e_err
+    arts = [a for a in arts if a["number"] is not None]
+    events_capped = event_pages >= EVENT_PAGE_CAP
+    if events_capped:
+        events_complete = False
 
     meta = None
     try:
@@ -235,65 +361,39 @@ def mine_once() -> None:
     except (HTTPError, URLError, OSError) as exc:
         err = err or f"repo meta: {exc}"
 
-    arts = []
-    for r in issues:
-        pr = r.get("pull_request")
-        marker = parse_marker(r.get("body"))
-        smell = smell_of(r)
-        user = r.get("user") or {}
-        arts.append({
-            "kind": "pr" if pr is not None else "issue",
-            "number": r.get("number"),
-            "title": r.get("title"),
-            "url": r.get("html_url"),
-            "author": user.get("login"),
-            "author_is_bot": is_bot(user),
-            "opened_at": r.get("created_at"),
-            "closed_at": r.get("closed_at"),          # null while open — never zero
-            "merged_at": (pr or {}).get("merged_at"),  # null = unmerged OR not a PR
-            "state": r.get("state"),
-            "state_reason": r.get("state_reason"),
-            "labels": [l.get("name") for l in r.get("labels") or []],
-            "comments": r.get("comments"),
-            "attribution": classify(marker, smell),
-            "smell": smell,
-            "marker": marker,
-        })
+    comments.sort(key=lambda c: c["created_at"] or "")
+    snippets_from = comments[0]["created_at"] if comments else None
+    if len(comments) > SNIPPET_KEEP:
+        snippets_from = comments[-SNIPPET_KEEP]["created_at"]
+        for c in comments[:-SNIPPET_KEEP]:
+            c["snippet"] = None      # never fetched-and-empty; not carried
+            c["url"] = None
 
-    comments = []
-    for c in comments_raw:
-        n = issue_number_of(c)
-        if n is None:
-            continue
-        cu = c.get("user") or {}
-        comments.append({
-            "id": c.get("id"), "number": n,
-            "author": cu.get("login"), "author_is_bot": is_bot(cu),
-            "created_at": c.get("created_at"),
-            "snippet": clean_snippet(c.get("body")),
-            "url": c.get("html_url"),
-        })
-
-    KEEP_EVENTS = {"closed", "reopened", "merged", "labeled", "referenced",
-                   "ready_for_review", "review_requested"}
-    events = []
-    for e in events_raw:
-        if e.get("event") not in KEEP_EVENTS:
-            continue
-        issue = e.get("issue") or {}
-        events.append({
-            "id": e.get("id"), "type": e.get("event"),
-            "number": issue.get("number"),
-            "actor": (e.get("actor") or {}).get("login"),
-            "created_at": e.get("created_at"),
-            "label": (e.get("label") or {}).get("name"),
-        })
+    events.sort(key=lambda e: e["created_at"] or "")
 
     manifest_path = DATA / "manifest.json"
     if not arts and err and manifest_path.exists():
         log(f"mine failed ({err}) — keeping previous manifest")
         save_cache()
         return
+
+    # A slice must never overwrite a walk. An untokened cycle sees 300 of 8,876
+    # artifacts and would otherwise replace fifteen months of history with two
+    # days of it — a strictly worse manifest that reads as authoritative, and
+    # whose "born, prior 7d" is a zero nobody measured. Observed exactly once,
+    # by starting the server without passing the token through.
+    if not issues_complete and manifest_path.exists():
+        try:
+            prev = json.loads(manifest_path.read_text())
+        except Exception:
+            prev = None
+        if (prev and prev.get("repo") == REPO
+                and (prev.get("coverage") or {}).get("complete")):
+            log(f"this cycle is a slice ({len(arts)} artifacts) and the manifest "
+                f"on disk was walked to the end — keeping the complete one. "
+                f"A token is what raises the horizon.")
+            save_cache()
+            return
 
     opened = [a["opened_at"] for a in arts if a["opened_at"]]
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -303,14 +403,21 @@ def mine_once() -> None:
         "fetched_at": now_iso,
         "error": err,
         "coverage": {
-            "issue_pages": ISSUE_PAGES, "per_page": 100,
+            "per_page": 100, "order": ORDER,
+            "issue_pages": issue_pages,
+            "comment_pages": comment_pages,
+            "event_pages": event_pages,
             "complete": issues_complete,
             "fetched_count": len(arts),
             "oldest_fetched": min(opened) if opened else None,
             "comments_complete": comments_complete,
-            "oldest_comment": comments[-1]["created_at"] if comments else None,
+            "comments_count": len(comments),
+            "oldest_comment": comments[0]["created_at"] if comments else None,
+            "snippets_from": snippets_from,
             "events_complete": events_complete,
-            "oldest_event": events[-1]["created_at"] if events else None,
+            "events_capped": events_capped,
+            "events_count": len(events),
+            "oldest_event": events[0]["created_at"] if events else None,
             "repo_open_issues": meta.get("open_issues_count") if meta else None,
             "repo_created_at": meta.get("created_at") if meta else None,
             "authenticated": bool(TOKEN),
@@ -321,8 +428,8 @@ def mine_once() -> None:
                      if RATE.get("reset") else None} if RATE else None),
         },
         "artifacts": arts,
-        "comments": comments[:300],
-        "events": events[:300],
+        "comments": comments,
+        "events": events,
     }
 
     DATA.mkdir(exist_ok=True)
@@ -333,8 +440,11 @@ def mine_once() -> None:
     counts = {}
     for a in arts:
         counts[a["attribution"]] = counts.get(a["attribution"], 0) + 1
-    log(f"mined {len(arts)} artifacts {counts} comments={len(comments)} "
-        f"events={len(events)} api_remaining={RATE.get('remaining', '?')} err={err}")
+    log(f"mined {len(arts)} artifacts {counts} "
+        f"comments={len(comments)} events={len(events)} "
+        f"pages={issue_pages}/{comment_pages}/{event_pages} "
+        f"complete={issues_complete}/{comments_complete}/{events_complete} "
+        f"api_remaining={RATE.get('remaining', '?')} err={err}")
 
 
 # ---- server -------------------------------------------------------------------
@@ -366,7 +476,8 @@ def serve() -> None:
         log(f"port {PORT} unavailable ({exc}) — assuming a tracker already serves")
         return
     log(f"serving http://127.0.0.1:{PORT}/app/swarm.html (repo={REPO}, "
-        f"poll={INTERVAL}s, pages={ISSUE_PAGES}/{COMMENT_PAGES}/{EVENT_PAGES})")
+        f"poll={INTERVAL}s, "
+        f"{'exhaustive' if COMPLETE else 'newest %d pages, unauthenticated' % MAX_PAGES})")
     httpd.serve_forever()
 
 
