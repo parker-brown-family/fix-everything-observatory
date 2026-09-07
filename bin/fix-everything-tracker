@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Fix-Everything Tracker — single entrypoint any tray, keybind, or launcher can call.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${FIX_TRACKER_PORT:-4517}"
+URL="http://127.0.0.1:${PORT}/app/swarm.html"
+mkdir -p "$ROOT/data"
+
+up() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null && { exec 3>&- 3<&-; return 0; } || return 1; }
+
+ensure_server() {
+  if ! up; then
+    setsid -f python3 "$ROOT/tracker.py" --serve >>"$ROOT/data/tracker.log" 2>&1
+    for _ in $(seq 1 25); do up && return 0; sleep 0.15; done
+    echo "server did not come up on :$PORT — see $ROOT/data/tracker.log" >&2
+    return 1
+  fi
+}
+
+case "${1:-open}" in
+  open)
+    ensure_server
+    exec xdg-open "$URL" ;;
+  mine)
+    exec python3 "$ROOT/tracker.py" --once ;;
+  serve)
+    exec python3 "$ROOT/tracker.py" --serve ;;
+  tray)
+    exec python3 "$ROOT/tray/fix-tracker-sni.py" ;;
+  status)
+    if up; then echo "server: up · $URL"; else echo "server: down"; fi
+    if [ -f "$ROOT/data/manifest.json" ]; then
+      tail -c 2000 "$ROOT/data/tracker.log" 2>/dev/null | tail -n 3 || true
+    else
+      echo "manifest: absent — run: $0 mine"
+    fi ;;
+  install)
+    exec "$ROOT/tray/install-tray.sh" ;;
+  *)
+    echo "usage: fix-everything-tracker {open|mine|serve|tray|status|install}" >&2
+    exit 2 ;;
+esac

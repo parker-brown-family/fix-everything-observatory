@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>We Can Fix Everything — the swarm</title>
+<meta name="description" content="Live instrument for the Omarchy repair swarm: agent-smelling tickets, lifespan, volume, closeability — scrub the whole history.">
+<meta property="og:title" content="We Can Fix Everything — the swarm">
+<meta property="og:description" content="every missing app, every incompatibility, every paper cut — watched healing in real time.">
+<meta name="theme-color" content="#1a1b26">
+<link rel="icon" href="omarchy-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500;700&display=swap">
+<style>
+  /* Tokyo Night, matched to wecanfixeverything.com — this page is its instrument panel. */
+  :root{
+    --bg:#1a1b26; --bg2:#16161e; --panel:#1f2335; --line:#2a2f44;
+    --dim:#414868; --ghost:#565f89; --fg:#c0caf5; --blue:#7aa2f7;
+    --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --yellow:#e0af68;
+    --violet:#bb9af7; --white:#ffffff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{color-scheme:dark}
+  body{
+    background:var(--bg); color:var(--blue);
+    font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:300;
+    height:100vh; display:grid; grid-template-rows:auto auto 1fr auto; overflow:hidden;
+  }
+  header{
+    display:flex; align-items:center; gap:20px; padding:9px 20px;
+    background:var(--bg2); border-bottom:1px solid var(--line);
+  }
+  .logo{width:36px;height:36px;flex:none;image-rendering:auto}
+  h1{font-size:15px;font-weight:700;letter-spacing:.14em;color:var(--white);white-space:nowrap}
+  h1 small{display:block;font-size:9px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:2px}
+  .diff{font-size:11px;line-height:1.5;white-space:pre;overflow:hidden;flex:1;min-width:0}
+  .diff .ctx{color:var(--ghost)}
+  .diff del{color:var(--red);text-decoration:line-through;text-decoration-thickness:.06em;display:block}
+  .diff ins{color:var(--green);font-weight:700;text-decoration:none;display:block}
+  .diff .ctx::before{content:"  "} .diff del::before{content:"- ";text-decoration:none} .diff ins::before{content:"+ "}
+  .controls{display:flex;gap:8px;align-items:center;flex:none}
+  button{
+    font:inherit;font-size:10.5px;letter-spacing:.08em;padding:6px 11px;cursor:pointer;
+    background:transparent;color:var(--cyan);border:1px solid var(--dim);
+  }
+  button:hover{border-color:var(--cyan)}
+  button.sim{color:var(--violet);border-color:var(--violet)}
+
+  #statsbar{
+    display:flex;align-items:stretch;gap:0;background:var(--bg2);
+    border-bottom:1px solid var(--line);padding:0 12px;overflow-x:auto;
+  }
+  .stat{padding:7px 16px 6px;border-right:1px solid var(--line);min-width:86px}
+  .stat:first-child{border-left:1px solid var(--line)}
+  .stat b{display:block;font-size:19px;font-weight:700;color:var(--fg);line-height:1.05;font-variant-numeric:tabular-nums}
+  .stat span{font-size:8.5px;letter-spacing:.16em;color:var(--ghost)}
+  .stat.yellow b{color:var(--yellow)} .stat.green b{color:var(--green)}
+  .stat.red b{color:var(--red)} .stat.violet b{color:var(--violet)}
+  .stat.cyan b{color:var(--cyan)} .stat.ghostly b{color:var(--ghost)}
+  #liveblock{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 6px;white-space:nowrap}
+  #livedot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+  #livedot.stale{background:var(--yellow);box-shadow:0 0 6px var(--yellow)}
+  #livedot.dead{background:var(--red);box-shadow:0 0 6px var(--red)}
+  #livedot.sim{background:var(--violet);box-shadow:0 0 8px var(--violet)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  #livedot{animation:pulse 2.2s infinite}
+  #dataage{font-size:10px;color:var(--ghost)}
+
+  main{display:grid;grid-template-columns:1fr 324px;min-height:0}
+  #stage{position:relative;min-width:0}
+  canvas{width:100%;height:100%;display:block}
+  aside{
+    border-left:1px solid var(--line); background:var(--bg2);
+    padding:12px 16px 20px; overflow-y:auto; font-size:11.5px; color:var(--fg);
+  }
+  aside h3{font-size:9.5px;letter-spacing:.2em;color:var(--ghost);margin:14px 0 6px;font-weight:500}
+  aside h3:first-child{margin-top:2px}
+  .big{font-size:26px;color:var(--white);font-weight:700;line-height:1.1}
+  .big small{font-size:11px;color:var(--ghost);font-weight:300;margin-left:6px}
+  .kv{display:flex;justify-content:space-between;gap:8px;margin:2.5px 0}
+  .kv span{color:var(--ghost)} .kv b{color:var(--fg);font-weight:500;text-align:right}
+  .kv b.g{color:var(--green)} .kv b.r{color:var(--red)} .kv b.y{color:var(--yellow)}
+  .kv b.c{color:var(--cyan)} .kv b.v{color:var(--violet)}
+  .fogchip{
+    background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(65,72,104,.45) 4px 6px);
+    border:1px dashed var(--dim); padding:5px 8px; color:#9aa5ce; margin-top:6px; font-size:10.5px; line-height:1.45;
+  }
+  .err{color:var(--red);margin-top:6px;font-size:10.5px;word-break:break-all}
+  .chip{display:inline-block;border:1px solid var(--dim);padding:1px 6px;margin:2px 3px 0 0;font-size:9.5px;color:var(--fg)}
+  .chip.v{border-color:var(--violet);color:var(--violet)}
+  .chip.c{border-color:var(--cyan);color:var(--cyan)}
+
+  /* inspector */
+  #insphead{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  #insphead .num{font-size:15px;font-weight:700;color:var(--white)}
+  .badge{font-size:9px;letter-spacing:.12em;padding:2px 7px;border:1px solid}
+  .badge.open{color:var(--yellow);border-color:var(--yellow)}
+  .badge.closed{color:var(--ghost);border-color:var(--ghost)}
+  .badge.merged{color:var(--green);border-color:var(--green)}
+  .badge.reopened{color:var(--red);border-color:var(--red)}
+  #inspclose{margin-left:auto;border:none;color:var(--ghost);font-size:15px;padding:2px 6px}
+  #inspclose:hover{color:var(--white)}
+  .insptitle{color:var(--fg);font-size:12px;line-height:1.5;margin:4px 0 8px}
+  .story{margin-top:6px;border-left:1px solid var(--line);padding-left:12px}
+  .ev{position:relative;margin:0 0 9px;font-size:10.8px;line-height:1.45;color:var(--fg)}
+  .ev::before{content:"";position:absolute;left:-15.5px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--dim)}
+  .ev.opened::before{background:var(--blue)} .ev.comment::before{background:var(--cyan)}
+  .ev.closed::before{background:var(--ghost)} .ev.merged::before{background:var(--green)}
+  .ev.reopened::before{background:var(--red)} .ev.labeled::before{background:var(--dim)}
+  .ev .t{color:var(--ghost);font-size:9.5px;margin-right:6px}
+  .ev .who{color:var(--blue)}
+  .ev .snip{color:#9aa5ce;display:block;margin-top:1px}
+  a.ghlink{color:var(--cyan);font-size:11px;text-decoration-thickness:.08em;text-underline-offset:.2em}
+
+  footer{
+    display:flex;align-items:center;gap:14px;padding:9px 18px;
+    background:var(--bg2);border-top:1px solid var(--line);
+  }
+  #scrub{flex:1;accent-color:var(--cyan);height:3px}
+  #clock{font-size:11px;color:var(--fg);min-width:172px;text-align:right;white-space:nowrap}
+  .legend{font-size:9.5px;color:var(--ghost);white-space:nowrap}
+  .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
+  .sw.hatch{background:repeating-linear-gradient(45deg,transparent 0 2px,var(--dim) 2px 4px);border:1px solid var(--dim)}
+
+  #overlay{
+    position:absolute;left:50%;top:36%;transform:translate(-50%,-50%);
+    background:var(--panel);border:1px solid var(--dim);padding:18px 22px;max-width:540px;
+    font-size:12px;line-height:1.6;color:var(--fg);display:none;z-index:6;
+  }
+  #overlay .obtns{margin-top:12px;display:flex;gap:10px}
+  #overlay code{color:var(--cyan)}
+
+  #feed{
+    position:absolute;left:12px;bottom:186px;width:390px;z-index:4;
+    font-size:10.5px;line-height:1.5;pointer-events:auto;
+  }
+  .feedrow{
+    display:flex;gap:7px;align-items:baseline;padding:3px 8px;margin-top:2px;
+    background:rgba(31,35,53,.82);border-left:2px solid var(--dim);
+    cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    animation:slidein .25s ease-out;
+  }
+  @keyframes slidein{from{transform:translateX(-14px);opacity:0}to{transform:none;opacity:1}}
+  .feedrow .ft{color:var(--ghost);font-size:9px;flex:none}
+  .feedrow .fx{flex:none;font-weight:700}
+  .feedrow .fb{color:var(--fg);overflow:hidden;text-overflow:ellipsis}
+  .feedrow.comment{border-left-color:var(--cyan)} .feedrow.comment .fx{color:var(--cyan)}
+  .feedrow.merged{border-left-color:var(--green)} .feedrow.merged .fx{color:var(--green)}
+  .feedrow.closed{border-left-color:var(--ghost)} .feedrow.closed .fx{color:var(--ghost)}
+  .feedrow.reopened{border-left-color:var(--red)} .feedrow.reopened .fx{color:var(--red)}
+  .feedrow.labeled,.feedrow.referenced,.feedrow.review_requested,.feedrow.ready_for_review{border-left-color:var(--dim)}
+  .feedrow.dimrow{opacity:.55;cursor:default}
+  .feedrow:hover{background:rgba(42,47,68,.92)}
+
+  #hint{
+    position:absolute;left:50%;bottom:196px;transform:translateX(-50%);
+    color:var(--ghost);font-size:10.5px;letter-spacing:.06em;z-index:3;
+    background:rgba(22,22,30,.7);padding:5px 14px;border:1px solid var(--line);
+    transition:opacity 1.2s;pointer-events:none;white-space:nowrap;
+  }
+  #tip{
+    position:fixed;pointer-events:none;background:var(--panel);border:1px solid var(--dim);
+    padding:6px 10px;font-size:10.5px;color:var(--fg);display:none;z-index:9;max-width:430px;line-height:1.5;
+  }
+  #tip .t2{color:var(--ghost)}
+</style>
+</head>
+<body>
+<header>
+  <img class="logo" src="omarchy-mark-256.png" alt="omarchy">
+  <h1>WE CAN FIX EVERYTHING<small>THE REPAIR SWARM · FIX-EVERYTHING TRACKER</small></h1>
+  <div class="diff"><span class="ctx">watching <span id="repoName">omacom/omarchy</span> repair itself</span>
+<del>every missing app, every incompatibility, every paper cut</del>
+<ins>one click · one disposable agent · one merged fix</ins></div>
+  <div class="controls">
+    <button id="modeBtn" title="[l] live / simulated history">LIVE</button>
+    <button id="scopeBtn" title="[s] cycle attribution scope">ALL ARTIFACTS</button>
+  </div>
+</header>
+<div id="statsbar"></div>
+<main>
+  <div id="stage">
+    <canvas id="world"></canvas>
+    <div id="feed"></div>
+    <div id="hint">hover a mote · click one for its story · space replays history · drag the flow to scrub</div>
+    <div id="overlay"></div>
+  </div>
+  <aside id="rail">loading…</aside>
+</main>
+<footer>
+  <button id="playBtn" title="[space] replay history">▶ REPLAY</button>
+  <input id="scrub" type="range" min="0" max="1000" value="1000">
+  <div id="clock">—</div>
+  <div class="legend">
+    <span class="sw" style="background:var(--cyan)"></span>marker
+    <span class="sw" style="background:var(--violet)"></span>agent smell
+    <span class="sw" style="background:var(--yellow)"></span>hint
+    <span class="sw" style="background:var(--ghost)"></span>no signal
+    <span class="sw" style="background:var(--red)"></span>reopened
+    <span class="sw" style="background:var(--green)"></span>merged
+    <span class="sw hatch"></span>nobody looked
+  </div>
+</footer>
+<div id="tip"></div>
+<script>
+'use strict';
+/* ================= utils ================= */
+const $=s=>document.querySelector(s);
+const cv=$('#world'), cx=cv.getContext('2d');
+const CSS=getComputedStyle(document.documentElement);
+const C=n=>CSS.getPropertyValue('--'+n).trim();
+const COL={bg:C('bg'),bg2:C('bg2'),panel:C('panel'),line:C('line'),dim:C('dim'),ghost:C('ghost'),
+  fg:C('fg'),blue:C('blue'),cyan:C('cyan'),green:C('green'),red:C('red'),
+  yellow:C('yellow'),violet:C('violet'),white:C('white')};
+const DAY=864e5, WK=7*DAY;
+function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function fmtDur(ms){if(ms==null||!isFinite(ms))return '—';const h=ms/36e5;if(h<1)return Math.round(ms/6e4)+'m';if(h<48)return h.toFixed(1)+'h';return (h/24).toFixed(1)+'d'}
+function fmtRel(ms){return fmtDur(ms)+' ago'}
+function fmtDate(t){return new Date(t).toUTCString().slice(0,16)}
+function fmtClockT(t){const d=new Date(t);return d.toUTCString().slice(5,22)}
+function quantile(arr,q){if(!arr.length)return null;const a=[...arr].sort((x,y)=>x-y);const i=(a.length-1)*q,lo=Math.floor(i);return a[lo]+(a[Math.min(lo+1,a.length-1)]-a[lo])*(i-lo)}
+function pct(n,d){return d>0?Math.round(100*n/d)+'%':'—'}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* ================= state ================= */
+const SCOPES=[['all','ALL ARTIFACTS'],['agentic','AGENTIC ONLY'],['marker','MARKER ONLY']];
+let DATA=null, SIMDATA=null, SIM=false, SCOPEI=0;
+let T=0, playing=false, dragStrip=false, sel=null;
+let hover=null, mouse={x:-1,y:-1,px:0,py:0};
+let hits=[], AGG=null, pings=[], G=null;
+let lastRailAt=0, lastFeedKey='', lastLiveT=0, hintGone=false;
+const tweens={};
+
+/* ================= data ================= */
+function normalize(raw){
+  const arts=(raw.artifacts||[]).map(a=>({
+    kind:a.kind,number:a.number,title:a.title||'',url:a.url,author:a.author||'?',
+    bot:!!a.author_is_bot,
+    opened:Date.parse(a.opened_at),
+    closed:a.closed_at?Date.parse(a.closed_at):null,
+    merged:!!a.merged_at,
+    attribution:a.attribution||'none',
+    smell:a.smell||{score:0,signals:[]},
+    marker:a.marker||null,
+    reopenedFlag:a.state_reason==='reopened',
+    not_planned:a.state_reason==='not_planned',
+    labels:a.labels||[], comments:a.comments||0,
+  })).filter(a=>isFinite(a.opened));
+  const byNumber=new Map(arts.map(a=>[a.number,a]));
+  const comments=(raw.comments||[]).map(c=>({
+    kind:'comment',t:Date.parse(c.created_at),number:c.number,author:c.author||'?',
+    snippet:c.snippet||'',url:c.url,id:'c'+c.id,
+  })).filter(c=>isFinite(c.t));
+  const events=(raw.events||[]).map(e=>({
+    kind:e.type,t:Date.parse(e.created_at),number:e.number,author:e.actor||'?',
+    label:e.label||null,id:'e'+e.id,
+  })).filter(e=>isFinite(e.t)&&e.number!=null);
+  const reopened=new Set(events.filter(e=>e.kind==='reopened').map(e=>e.number));
+  for(const a of arts)if(a.reopenedFlag)reopened.add(a.number);
+  const stream=[...comments,...events].sort((x,y)=>x.t-y.t);
+  const now=Date.now();
+  const t0=arts.length?Math.min(...arts.map(a=>a.opened)):now-30*DAY;
+  return {repo:raw.repo||'?',fetched:Date.parse(raw.fetched_at)||now,
+    coverage:raw.coverage||{},error:raw.error||null,
+    artifacts:arts,byNumber,stream,reopened,t0,t1:now,sim:false};
+}
+
+const SIM_SNIPS=['reproduced on 3.1.2, the panel comes back after reload','patch works here, shipping it',
+ 'still failing under wayland for me','same fingerprint as the earlier crash, deduping',
+ 'agent run attached, tests green','can we get a second pair of eyes on the fallback path?',
+ 'confirmed fixed after the merge','reopening — regression on multi-monitor'];
+function simulate(){
+  const R=rng(1337), now=Date.now(), t0=now-180*DAY;
+  const arts=[],stream=[];let n=1;
+  const authors=['dhh','maria','contributor42','tobias','jules'];
+  for(let d=0;d<180;d++){
+    const heat=Math.exp(-d/45), lam=13*heat+1.3;
+    const births=Math.floor(lam)+(R()<lam%1?1:0);
+    for(let b=0;b<births;b++){
+      const opened=t0+d*DAY+R()*DAY, isPR=R()<0.62;
+      let closed=null,merged=false,reo=false,np=false;
+      if(R()<0.5+0.44*(d/180)){
+        const medH=5+68*Math.exp(-d/70);
+        const life=medH*Math.exp((R()*2-1)*1.1)*36e5;
+        if(opened+life<now-36e5){closed=opened+life;merged=isPR&&R()<0.8;np=!merged&&R()<0.25;reo=R()<(0.06*heat+0.012)}
+      }
+      const roll=R();
+      const attribution=roll<0.5?'marker':roll<0.8?'smell':roll<0.9?'hint':'none';
+      const sig=attribution==='smell'?['ai-trailer','conventional-title']:attribution==='hint'?['conventional-title']:[];
+      const agent=attribution!=='none';
+      const a={kind:isPR?'pr':'issue',number:n,url:null,author:agent?'omarchy-fixer[bot]':authors[Math.floor(R()*authors.length)],
+        bot:agent,title:(isPR?'fix: ':'error: ')+'synthetic repair from one-click event '+n,
+        opened,closed,merged,reopenedFlag:reo,not_planned:np,attribution,
+        smell:{score:sig.length*2,signals:sig},marker:attribution==='marker'?{version:1,source:'one-click-error-fixer'}:null,
+        labels:agent?['origin:agent']:[],comments:0};
+      arts.push(a);
+      const nc=Math.floor(R()*3.4);
+      for(let k=0;k<nc;k++){
+        const ct=opened+R()*((closed||now)-opened);
+        stream.push({kind:'comment',t:ct,number:n,author:authors[Math.floor(R()*authors.length)],
+          snippet:SIM_SNIPS[Math.floor(R()*SIM_SNIPS.length)],url:null,id:'sc'+n+'-'+k});
+        a.comments++;
+      }
+      if(closed){stream.push({kind:merged?'merged':'closed',t:closed,number:n,author:'omarchy-fixer[bot]',id:'se'+n});
+        if(reo)stream.push({kind:'reopened',t:Math.min(closed+R()*3*DAY,now-1e3),number:n,author:authors[0],id:'sr'+n})}
+      n++;
+    }
+  }
+  stream.sort((x,y)=>x.t-y.t);
+  SIMDATA={repo:'simulation · 180 synthetic days',fetched:now,
+    coverage:{complete:true,comments_complete:true,events_complete:true,fetched_count:arts.length},
+    error:null,artifacts:arts,byNumber:new Map(arts.map(a=>[a.number,a])),
+    stream,reopened:new Set(arts.filter(a=>a.reopenedFlag).map(a=>a.number)),t0,t1:now,sim:true};
+}
+
+function cur(){return SIM?SIMDATA:DATA}
+function scopeKey(){return SCOPES[SCOPEI][0]}
+function inScope(a){
+  const k=scopeKey();
+  if(k==='all')return true;
+  if(k==='agentic')return a.attribution!=='none';
+  return a.attribution==='marker';
+}
+function visible(){const d=cur();return d?d.artifacts.filter(inScope):[]}
+function streamInScope(d){
+  const k=scopeKey();
+  return d.stream.filter(s=>{
+    const a=d.byNumber.get(s.number);
+    if(!a)return k==='all';            // ticket outside fetched horizon
+    return inScope(a);
+  });
+}
+
+function loadManifest(first){
+  const s=document.createElement('script');
+  s.src='../data/manifest.js?t='+Date.now();
+  s.onload=()=>{
+    if(window.SWARM_DATA){
+      const atEnd=!DATA||T>=DATA.t1-1500;
+      const prevLive=lastLiveT;
+      DATA=normalize(window.SWARM_DATA);
+      if(!SIM&&prevLive&&DATA.stream.length){
+        for(const it of DATA.stream)if(it.t>prevLive)pingItem(it);
+      }
+      lastLiveT=Math.max(lastLiveT,...DATA.stream.map(i=>i.t),0);
+      if(first||atEnd)T=DATA.t1;
+      refresh();
+    }
+    s.remove();
+  };
+  s.onerror=()=>{s.remove(); if(first)refresh();};
+  document.head.appendChild(s);
+}
+
+/* ================= aggregates ================= */
+function refresh(){
+  const d=cur();
+  if(d)$('#repoName').textContent=d.repo;
+  if(!d){AGG=null;syncOverlay();renderRail();renderStats();return}
+  const rows=visible();
+  const span=d.t1-d.t0;
+  const unit=span<=92*DAY?DAY:WK;
+  const buckets=Math.max(2,Math.ceil(span/unit)+1);
+  const openedC=new Array(buckets).fill(0),closedC=new Array(buckets).fill(0),mergedC=new Array(buckets).fill(0);
+  const bi=t=>Math.min(buckets-1,Math.max(0,Math.floor((t-d.t0)/unit)));
+  for(const a of rows){
+    openedC[bi(a.opened)]++;
+    if(a.closed){closedC[bi(a.closed)]++;if(a.merged)mergedC[bi(a.closed)]++}
+  }
+  for(let k=1;k<buckets;k++){openedC[k]+=openedC[k-1];closedC[k]+=closedC[k-1];mergedC[k]+=mergedC[k-1]}
+  AGG={unit,buckets,openedC,closedC,mergedC,maxTotal:Math.max(1,openedC[buckets-1])};
+  const v=Math.round(1000*(T-d.t0)/(d.t1-d.t0));
+  $('#scrub').value=isFinite(v)?Math.min(1000,Math.max(0,v)):1000;
+  syncOverlay();renderRail();renderStats();
+}
+
+/* ================= stats bar ================= */
+const STATS=[
+  ['openNow','OPEN NOW','yellow'],['opened','OPENED','ghostly'],['settled','SETTLED',''],
+  ['merged','MERGED','green'],['reopened','REOPENED','red'],
+  ['agentic','AGENT-SMELLING','violet'],['marker','MARKER','cyan'],['comm','COMMENTS',''],
+];
+function buildStatsBar(){
+  $('#statsbar').innerHTML=STATS.map(([id,label,cls])=>
+    `<div class="stat ${cls}"><b id="st-${id}">—</b><span>${label}</span></div>`).join('')+
+    `<div id="liveblock"><span id="livedot"></span><span id="dataage">—</span></div>`;
+}
+function renderStats(){
+  const d=cur();
+  if(!d){for(const [id] of STATS)$('#st-'+id).textContent='—';return}
+  const rows=visible();
+  const born=rows.filter(a=>a.opened<=T);
+  const openNow=born.filter(a=>!a.closed||a.closed>T).length;
+  const settledRows=born.filter(a=>a.closed&&a.closed<=T);
+  const merged=settledRows.filter(a=>a.merged).length;
+  let reo=0;for(const a of born)if(d.reopened.has(a.number))reo++;
+  const agentic=born.filter(a=>a.attribution!=='none').length;
+  const marker=born.filter(a=>a.attribution==='marker').length;
+  const comm=streamInScope(d).filter(s=>s.kind==='comment'&&s.t<=T).length;
+  setTween('openNow',openNow);setTween('opened',born.length);setTween('settled',settledRows.length);
+  setTween('merged',merged);setTween('reopened',reo);setTween('agentic',agentic);
+  setTween('marker',marker);setTween('comm',comm);
+  const dot=$('#livedot'),age=$('#dataage');
+  if(SIM){dot.className='sim';age.textContent='SIMULATED';}
+  else{
+    const a=Date.now()-d.fetched;
+    dot.className=a<130e3?'':(a<600e3?'stale':'dead');
+    age.textContent='data '+fmtDur(a)+' old';
+  }
+}
+function setTween(k,v){(tweens[k]??={shown:v,target:v}).target=v}
+function stepTweens(){
+  for(const k in tweens){
+    const tw=tweens[k], el=$('#st-'+k);
+    if(!el)continue;
+    tw.shown+= (tw.target-tw.shown)*0.25;
+    if(Math.abs(tw.target-tw.shown)<0.6)tw.shown=tw.target;
+    el.textContent=Math.round(tw.shown);
+  }
+}
+
+/* ================= overlay ================= */
+function syncOverlay(){
+  const ov=$('#overlay'), d=cur();
+  let html=null;
+  if(!d){
+    html=`<b style="color:var(--yellow)">no manifest yet</b><br>
+    the miner hasn't run — <code>fix-everything-tracker mine</code> builds
+    <code>data/manifest.js</code> from GitHub. Or watch a synthetic healing arc.
+    <div class="obtns"><button id="obSim">SIMULATE HISTORY</button></div>`;
+  } else {
+    const markerN=d.artifacts.filter(a=>a.attribution==='marker').length;
+    if(!SIM&&scopeKey()==='marker'&&markerN===0){
+      html=`<b style="color:var(--cyan)">0 artifacts carry the <code>omarchy-fix-event:v1</code> marker</b><br>
+      nothing in the wild autospawned through the one-click fixer yet — the pattern exists,
+      the stamp doesn't. Grey is not zero: <b>${d.artifacts.length}</b> artifacts sit in the
+      other scopes${d.coverage.complete?'':', older history NOT inspected'}.
+      <div class="obtns"><button id="obAll">SHOW EVERYTHING</button><button id="obSim">SIMULATE HISTORY</button></div>`;
+    } else if(!visible().length){
+      html=`<b style="color:var(--yellow)">nothing in scope</b> — widen the attribution scope.
+      <div class="obtns"><button id="obAll">SHOW EVERYTHING</button></div>`;
+    }
+  }
+  if(html){
+    ov.innerHTML=html;ov.style.display='block';
+    const a=$('#obAll'),s=$('#obSim');
+    if(a)a.onclick=()=>{SCOPEI=0;$('#scopeBtn').textContent=SCOPES[0][1];refresh()};
+    if(s)s.onclick=()=>setSim(true);
+  } else ov.style.display='none';
+}
+
+/* ================= right rail: metrics or inspector ================= */
+function renderRail(){
+  if(sel){renderInspector();return}
+  const d=cur(),rail=$('#rail');
+  if(!d){rail.innerHTML='<h3>DATA</h3><div class="kv"><span>manifest</span><b class="r">absent</b></div>';return}
+  const rows=visible();
+  const alive=rows.filter(a=>a.opened<=T&&(!a.closed||a.closed>T));
+  const closed=rows.filter(a=>a.closed&&a.closed<=T);
+  const prs=rows.filter(a=>a.kind==='pr'),prsClosed=closed.filter(a=>a.kind==='pr');
+  const mergedN=prsClosed.filter(a=>a.merged).length;
+  const lives=closed.map(a=>a.closed-a.opened);
+  const openAges=alive.map(a=>T-a.opened);
+  const b7=rows.filter(a=>a.opened>T-7*DAY&&a.opened<=T).length;
+  const b7p=rows.filter(a=>a.opened>T-14*DAY&&a.opened<=T-7*DAY).length;
+  const attr={marker:0,smell:0,hint:0,none:0};
+  for(const a of d.artifacts)attr[a.attribution]=(attr[a.attribution]||0)+1;
+  const cov=d.coverage||{};
+  rail.innerHTML=`
+  <h3>SWARM · ${esc(SCOPES[SCOPEI][1])}${SIM?' · <span style="color:var(--violet)">SIMULATED</span>':''}</h3>
+  <div class="big">${alive.length}<small>alive at cursor</small></div>
+  <div class="kv"><span>issues / PRs in scope</span><b>${rows.length-prs.length} / ${prs.length}</b></div>
+  <h3>VOLUME</h3>
+  <div class="kv"><span>born, last 7d of cursor</span><b class="r">${b7}</b></div>
+  <div class="kv"><span>born, prior 7d</span><b>${b7p}</b></div>
+  <div class="kv"><span>trend</span><b class="${b7<=b7p?'g':'r'}">${b7p||b7?(b7<=b7p?'▼ quieter':'▲ louder'):'—'}</b></div>
+  <h3>LIFESPAN</h3>
+  <div class="kv"><span>median, settled</span><b class="c">${fmtDur(quantile(lives,0.5))}</b></div>
+  <div class="kv"><span>p90, settled</span><b>${fmtDur(quantile(lives,0.9))}</b></div>
+  <div class="kv"><span>median age, still open</span><b class="y">${fmtDur(quantile(openAges,0.5))}</b></div>
+  <h3>CLOSEABILITY</h3>
+  <div class="kv"><span>settled / born</span><b>${pct(closed.length,rows.filter(a=>a.opened<=T).length)}</b></div>
+  <div class="kv"><span>merged, of settled PRs</span><b class="g">${pct(mergedN,prsClosed.length)}</b></div>
+  <div class="kv"><span>closed not-planned</span><b>${pct(closed.filter(a=>a.not_planned).length,closed.length)}</b></div>
+  <div class="kv"><span>reopened, in window</span><b class="${d.reopened.size?'r':''}">${d.reopened.size}</b></div>
+  <h3>ATTRIBUTION · ALL FETCHED</h3>
+  <div class="kv"><span>marker (the pattern)</span><b class="c">${attr.marker}</b></div>
+  <div class="kv"><span>agent smell (score ≥ 2)</span><b class="v">${attr.smell}</b></div>
+  <div class="kv"><span>hint (one weak signal)</span><b class="y">${attr.hint}</b></div>
+  <div class="kv"><span>no signal</span><b>${attr.none}</b></div>
+  <h3>COVERAGE</h3>
+  <div class="kv"><span>artifacts fetched</span><b>${cov.fetched_count??d.artifacts.length}</b></div>
+  <div class="kv"><span>repo reports open</span><b>${cov.repo_open_issues??'—'}</b></div>
+  <div class="kv"><span>comments / events</span><b>${d.stream.filter(s=>s.kind==='comment').length} / ${d.stream.filter(s=>s.kind!=='comment').length}</b></div>
+  <div class="kv"><span>api budget</span><b>${cov.api?`${cov.api.remaining}/${cov.api.limit}`:'—'}</b></div>
+  ${cov.complete||SIM?'':`<div class="fogchip">history older than ${cov.oldest_fetched?esc(String(cov.oldest_fetched).slice(0,10)):'?'} NOT INSPECTED — newest ${cov.issue_pages??'?'}×100 fetched${cov.authenticated?'':' (set GITHUB_TOKEN to raise the horizon)'}.</div>`}
+  ${!SIM&&cov.comments_complete===false?`<div class="fogchip">comments older than ${cov.oldest_comment?esc(String(cov.oldest_comment).slice(0,10)):'?'} not fetched — absence below is not silence.</div>`:''}
+  ${d.error?`<div class="err">miner: ${esc(d.error)}</div>`:''}`;
+}
+
+function storyOf(d,a){
+  const ev=[{t:a.opened,cls:'opened',html:`<span class="who">@${esc(a.author)}</span>${a.bot?' <span class="chip v">bot</span>':''} opened this ${a.kind}`}];
+  for(const s of d.stream){
+    if(s.number!==a.number)continue;
+    if(s.kind==='comment')ev.push({t:s.t,cls:'comment',html:`<span class="who">@${esc(s.author)}</span> commented<span class="snip">“${esc(s.snippet.slice(0,110))}${s.snippet.length>110?'…':''}”</span>`});
+    else if(s.kind==='reopened')ev.push({t:s.t,cls:'reopened',html:`<b style="color:var(--red)">reopened</b> by <span class="who">@${esc(s.author)}</span>`});
+    else if(s.kind==='labeled')ev.push({t:s.t,cls:'labeled',html:`labeled <span class="chip">${esc(s.label||'?')}</span>`});
+    else if(s.kind==='referenced')ev.push({t:s.t,cls:'labeled',html:`referenced from a commit`});
+    else if(s.kind==='review_requested'||s.kind==='ready_for_review')ev.push({t:s.t,cls:'labeled',html:esc(s.kind.replace(/_/g,' '))});
+    else if(s.kind==='closed'&&(!a.closed||Math.abs(s.t-a.closed)>90e3))ev.push({t:s.t,cls:'closed',html:`closed by <span class="who">@${esc(s.author)}</span>`});
+    else if(s.kind==='merged'&&(!a.closed||Math.abs(s.t-a.closed)>90e3))ev.push({t:s.t,cls:'merged',html:`merged by <span class="who">@${esc(s.author)}</span>`});
+  }
+  if(a.closed)ev.push({t:a.closed,cls:a.merged?'merged':'closed',html:a.merged?`<b style="color:var(--green)">merged</b>`:`closed${a.not_planned?' · not planned':''}`});
+  ev.sort((x,y)=>x.t-y.t);
+  return ev;
+}
+function renderInspector(){
+  const d=cur(),rail=$('#rail');
+  const a=d&&d.byNumber.get(sel);
+  if(!a){sel=null;renderRail();return}
+  const state=a.closed?(a.merged?'merged':'closed'):'open';
+  const story=storyOf(d,a);
+  const fogNote=(!SIM&&d.coverage.comments_complete===false&&d.coverage.oldest_comment&&a.opened<Date.parse(d.coverage.oldest_comment))
+    ?`<div class="fogchip">activity before ${esc(String(d.coverage.oldest_comment).slice(0,10))} is outside the fetched window — this story may be missing its beginning.</div>`:'';
+  rail.innerHTML=`
+  <div id="insphead">
+    <span class="num">#${a.number}</span>
+    <span class="badge ${state}">${state.toUpperCase()}</span>
+    ${d.reopened.has(a.number)?'<span class="badge reopened">REOPENED</span>':''}
+    <span style="color:var(--ghost);font-size:10px">${a.kind.toUpperCase()}</span>
+    <button id="inspclose" title="[esc]">✕</button>
+  </div>
+  <div class="insptitle">${esc(a.title)}</div>
+  <div class="kv"><span>author</span><b>@${esc(a.author)}${a.bot?' · bot':''}</b></div>
+  <div class="kv"><span>opened</span><b>${fmtDate(a.opened)}</b></div>
+  <div class="kv"><span>${a.closed?'settled':'age'}</span><b class="${a.closed?'':'y'}">${a.closed?fmtDate(a.closed):fmtDur(Date.now()-a.opened)+' and counting'}</b></div>
+  <div class="kv"><span>lifespan</span><b class="c">${a.closed?fmtDur(a.closed-a.opened):'—'}</b></div>
+  <div class="kv"><span>attribution</span><b class="${a.attribution==='marker'?'c':a.attribution==='smell'?'v':a.attribution==='hint'?'y':''}">${a.attribution}</b></div>
+  ${a.smell.signals.length?`<div style="margin:3px 0 0">${a.smell.signals.map(s=>`<span class="chip v">${esc(s)}</span>`).join('')}</div>`:''}
+  ${a.labels.length?`<div style="margin:4px 0 0">${a.labels.map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div>`:''}
+  ${a.marker?`<div class="fogchip" style="border-style:solid;border-color:var(--cyan);background:none;color:var(--cyan)">omarchy-fix-event:v${a.marker.version} · ${esc(a.marker.source||'?')}</div>`:''}
+  <h3>THE STORY${SIM?' · SIMULATED':''}</h3>
+  <div class="story">${story.map(e=>`<div class="ev ${e.cls}"><span class="t">+${fmtDur(e.t-a.opened)}</span>${e.html}</div>`).join('')}</div>
+  ${fogNote}
+  ${a.url?`<div style="margin-top:10px"><a class="ghlink" href="${esc(a.url)}" target="_blank">open on GitHub ↗</a></div>`:''}`;
+  $('#inspclose').onclick=()=>{sel=null;renderRail()};
+}
+
+/* ================= feed ================= */
+function pingItem(it){
+  const d=cur();if(!d||!G)return;
+  const a=d.byNumber.get(it.number);
+  let x,y;
+  if(a&&a.opened<=T&&(!a.closed||a.closed>T)){const p=posOf(a,G.zone,performance.now()/1000);x=p.x;y=p.y}
+  else {x=G.xOf?G.xOf(Math.min(it.t,cur().t1)):G.W/2;y=G.lane?G.lane.y+G.lane.h/2:G.H-160}
+  const col=it.kind==='comment'?COL.cyan:it.kind==='merged'?COL.green:it.kind==='reopened'?COL.red:COL.ghost;
+  pings.push({x,y,start:performance.now(),col});
+}
+const FEED_ICON={comment:'❝',closed:'✕',merged:'✔',reopened:'⟲',labeled:'#',referenced:'→',review_requested:'◎',ready_for_review:'◎'};
+function renderFeed(){
+  const d=cur(),box=$('#feed');
+  if(!d){box.innerHTML='';return}
+  const upto=Math.min(T,d.t1);
+  const items=streamInScope(d).filter(s=>s.t<=upto);
+  const show=items.slice(-7).reverse();
+  const key=show.map(s=>s.id).join('|')+scopeKey();
+  if(key===lastFeedKey)return;
+  lastFeedKey=key;
+  box.innerHTML=show.map(s=>{
+    const known=d.byNumber.has(s.number);
+    const txt=s.kind==='comment'
+      ?`@${esc(s.author)} → #${s.number} “${esc(s.snippet.slice(0,64))}${s.snippet.length>64?'…':''}”`
+      :s.kind==='labeled'?`#${s.number} labeled ${esc(s.label||'?')}`
+      :`#${s.number} ${esc(s.kind.replace(/_/g,' '))} · @${esc(s.author)}`;
+    const when=SIM||T<d.t1-1500?fmtClockT(s.t):fmtRel(Date.now()-s.t);
+    return `<div class="feedrow ${s.kind}${known?'':' dimrow'}" data-n="${known?s.number:''}">
+      <span class="ft">${when}</span><span class="fx">${FEED_ICON[s.kind]||'·'}</span>
+      <span class="fb">${txt}</span></div>`;
+  }).join('');
+  for(const row of box.querySelectorAll('.feedrow[data-n]')){
+    const n=parseInt(row.dataset.n,10);
+    if(!isNaN(n))row.onclick=()=>{sel=n;setPlaying(false);renderInspector()};
+  }
+}
+
+/* ================= geometry + drawing ================= */
+function sizeCanvas(){
+  const r=cv.getBoundingClientRect(),dpr=Math.min(2,window.devicePixelRatio||1);
+  const w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);
+  if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h}
+  cx.setTransform(dpr,0,0,dpr,0,0);
+  return {W:r.width,H:r.height};
+}
+function hatch(x,y,w,h){
+  cx.save();cx.beginPath();cx.rect(x,y,w,h);cx.clip();
+  cx.strokeStyle='rgba(65,72,104,0.5)';cx.lineWidth=1;cx.beginPath();
+  for(let i=-h;i<w;i+=6){cx.moveTo(x+i,y+h);cx.lineTo(x+i+h,y)}
+  cx.stroke();cx.restore();
+}
+function diamond(x,y,r){cx.beginPath();cx.moveTo(x,y-r);cx.lineTo(x+r,y);cx.lineTo(x,y+r);cx.lineTo(x-r,y);cx.closePath()}
+function radiusOf(ageDays,zone,band){
+  const rmax=Math.min(zone.w*0.38,zone.h*0.42);
+  return Math.min(rmax,26+24*Math.log2(1+ageDays)+band*20);
+}
+function posOf(a,zone,tsec){
+  let s=a._s;
+  if(!s){const R=rng((a.number*2654435761)>>>0);
+    s=a._s={a0:R()*6.283,dir:R()<0.5?1:-1,ph:R()*6.283,band:R()};}
+  const age=Math.max(0,(T-a.opened)/DAY);
+  const r=radiusOf(age,zone,s.band);
+  const w=s.dir*(0.5/(1+age*0.4)+0.05);
+  const ang=s.a0+w*tsec,wob=Math.sin(tsec*0.8+s.ph)*4;
+  return {x:zone.cx+Math.cos(ang)*(r+wob)*1.45,y:zone.cy+Math.sin(ang)*(r+wob)*0.75};
+}
+function attrColor(a){
+  return a.attribution==='marker'?COL.cyan
+    :a.attribution==='smell'?COL.violet
+    :a.attribution==='hint'?COL.yellow:COL.ghost;
+}
+
+function draw(ts){
+  const {W,H}=sizeCanvas(),tsec=ts/1000;
+  const cfd={x:0,y:H-132,w:W,h:132};
+  const lane={x:0,y:cfd.y-26,w:W,h:26};
+  const zone={x:0,y:0,w:W,h:lane.y};zone.cx=W*0.5;zone.cy=zone.h*0.52;
+  cx.fillStyle=COL.bg;cx.fillRect(0,0,W,H);
+  const g=cx.createRadialGradient(zone.cx,zone.cy,10,zone.cx,zone.cy,Math.max(W,zone.h)*0.55);
+  g.addColorStop(0,'rgba(122,162,247,0.07)');g.addColorStop(1,'rgba(122,162,247,0)');
+  cx.fillStyle=g;cx.fillRect(0,0,W,zone.h);
+  cx.strokeStyle=COL.line;cx.beginPath();
+  cx.moveTo(0,lane.y);cx.lineTo(W,lane.y);cx.moveTo(0,cfd.y);cx.lineTo(W,cfd.y);cx.stroke();
+
+  const d=cur();hits=[];
+  if(d&&AGG){
+    if(playing){T+=(d.t1-d.t0)/1400;if(T>=d.t1){T=d.t1;setPlaying(false)}
+      $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));}
+    T=Math.min(d.t1,Math.max(d.t0,T));
+    $('#clock').textContent=(T>=d.t1-1500?'NOW · ':'')+fmtDate(T);
+
+    const rows=visible();
+    const fog=(!d.coverage.complete&&!SIM)?86:0;
+    const mL=14,mR=14,usable=W-mL-mR-fog;
+    const xOf=t=>mL+fog+((t-d.t0)/(d.t1-d.t0))*usable;
+    G={W,H,zone,lane,cfd,fog,xOf};
+
+    /* age rings */
+    cx.setLineDash([2,5]);cx.strokeStyle='rgba(65,72,104,0.55)';cx.lineWidth=1;
+    cx.fillStyle=COL.ghost;cx.font='8.5px JetBrains Mono,monospace';cx.textAlign='left';
+    for(const [days,lab] of [[1,'1 day'],[7,'1 week'],[30,'1 month']]){
+      const r=radiusOf(days,zone,0.5);
+      cx.beginPath();cx.ellipse(zone.cx,zone.cy,r*1.45,r*0.75,0,0,7);cx.stroke();
+      cx.fillText(lab,zone.cx+r*1.45+5,zone.cy+3);
+    }
+    cx.setLineDash([]);
+
+    /* hive */
+    const pulse=2*Math.sin(tsec*2);
+    cx.strokeStyle='rgba(122,162,247,0.55)';cx.lineWidth=1.5;
+    cx.beginPath();cx.arc(zone.cx,zone.cy,15+pulse,0,7);cx.stroke();
+    cx.strokeStyle='rgba(122,162,247,0.18)';
+    cx.beginPath();cx.arc(zone.cx,zone.cy,26+pulse*1.4,0,7);cx.stroke();
+    cx.fillStyle=COL.ghost;cx.font='9.5px JetBrains Mono,monospace';cx.textAlign='center';
+    cx.fillText(d.repo,zone.cx,zone.cy+44);
+
+    /* alive swarm */
+    for(const a of rows){
+      if(a.opened>T||(a.closed&&a.closed<=T))continue;
+      const p=posOf(a,zone,tsec);
+      const col=attrColor(a);
+      const r=2.2+Math.min(3,a.comments*0.35);
+      cx.save();
+      if(a.attribution!=='none'){cx.shadowColor=col;cx.shadowBlur=a.attribution==='smell'?12:9}
+      cx.fillStyle=col;
+      if(a.kind==='pr'){diamond(p.x,p.y,r+1.4);cx.fill()}
+      else{cx.beginPath();cx.arc(p.x,p.y,r,0,7);cx.fill()}
+      cx.restore();
+      if(d.reopened.has(a.number)){cx.strokeStyle=COL.red;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+3,0,7);cx.stroke()}
+      if(sel===a.number){cx.strokeStyle=COL.white;cx.lineWidth=1.2;cx.beginPath();cx.arc(p.x,p.y,r+5.5,0,7);cx.stroke()}
+      else if(hover&&hover.a===a){cx.strokeStyle=COL.white;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+5,0,7);cx.stroke()}
+      hits.push({x:p.x,y:p.y,a});
+    }
+
+    /* event lane: ticks by time */
+    const items=streamInScope(d);
+    for(const s of items){
+      const x=xOf(s.t);
+      if(x<mL+fog-1||x>W-mR+1)continue;
+      const past=s.t<=T;
+      if(s.kind==='comment'){
+        cx.strokeStyle=past?'rgba(125,207,255,0.8)':'rgba(125,207,255,0.22)';
+        cx.beginPath();cx.moveTo(x,lane.y+4);cx.lineTo(x,lane.y+12);cx.stroke();
+      } else {
+        const col=s.kind==='merged'?COL.green:s.kind==='reopened'?COL.red:s.kind==='closed'?COL.ghost:COL.dim;
+        cx.strokeStyle=past?col:'rgba(65,72,104,0.3)';cx.lineWidth=s.kind==='reopened'?2:1.4;
+        cx.beginPath();cx.moveTo(x,lane.y+13);cx.lineTo(x,lane.y+23);cx.stroke();cx.lineWidth=1;
+      }
+    }
+    cx.fillStyle=COL.ghost;cx.font='8.5px JetBrains Mono,monospace';cx.textAlign='left';
+    cx.fillText('COMMENTS',mL+fog+2,lane.y+11);
+    cx.fillText('STATE CHANGES',mL+fog+2,lane.y+23);
+
+    /* CFD: stacked cumulative bands (merged / closed / open) */
+    const bY=t=>cfd.y+cfd.h-8-(t/AGG.maxTotal)*(cfd.h-26);
+    const bx=k=>xOf(d.t0+Math.min(k*AGG.unit+AGG.unit,d.t1));
+    function band(lower,upper,fill){
+      cx.beginPath();
+      cx.moveTo(bx(0),bY(lower[0]));
+      for(let k=1;k<AGG.buckets;k++)cx.lineTo(bx(k),bY(lower[k]));
+      for(let k=AGG.buckets-1;k>=0;k--)cx.lineTo(bx(k),bY(upper[k]));
+      cx.closePath();cx.fillStyle=fill;cx.fill();
+    }
+    const zero=new Array(AGG.buckets).fill(0);
+    const closedTop=AGG.closedC.map((v,k)=>v);
+    const openTop=AGG.openedC.map((v,k)=>v);
+    band(zero,AGG.mergedC,'rgba(158,206,106,0.5)');
+    band(AGG.mergedC,closedTop,'rgba(86,95,137,0.45)');
+    band(closedTop,openTop,'rgba(224,175,104,0.38)');
+    cx.strokeStyle='rgba(224,175,104,0.9)';cx.lineWidth=1.2;cx.beginPath();
+    for(let k=0;k<AGG.buckets;k++){const y=bY(openTop[k]);k?cx.lineTo(bx(k),y):cx.moveTo(bx(k),y)}
+    cx.stroke();
+    cx.fillStyle=COL.ghost;cx.font='9px JetBrains Mono,monospace';cx.textAlign='left';
+    cx.fillText('CUMULATIVE FLOW — band gap = work in progress',mL+fog+2,cfd.y+14);
+    cx.fillStyle='rgba(158,206,106,0.95)';cx.fillText('merged',mL+fog+300,cfd.y+14);
+    cx.fillStyle='#8a93bd';cx.fillText('closed',mL+fog+352,cfd.y+14);
+    cx.fillStyle=COL.yellow;cx.fillText('still open',mL+fog+400,cfd.y+14);
+
+    /* fog of the uninspected */
+    if(fog){
+      hatch(0,lane.y,mL+fog-4,H-lane.y);
+      cx.save();cx.translate(mL+fog/2-2,lane.y+(H-lane.y)/2);cx.rotate(-Math.PI/2);
+      cx.fillStyle='#9aa5ce';cx.font='9px JetBrains Mono,monospace';cx.textAlign='center';
+      cx.fillText('NOT INSPECTED',0,3);cx.restore();
+    }
+
+    /* time cursor */
+    const xT=xOf(T);
+    cx.strokeStyle='rgba(255,255,255,0.85)';cx.lineWidth=1;
+    cx.beginPath();cx.moveTo(xT,lane.y);cx.lineTo(xT,H-4);cx.stroke();
+    cx.fillStyle='rgba(255,255,255,0.75)';
+    cx.beginPath();cx.moveTo(xT-4,lane.y);cx.lineTo(xT+4,lane.y);cx.lineTo(xT,lane.y+6);cx.closePath();cx.fill();
+
+    /* pings */
+    const now=performance.now();
+    pings=pings.filter(p=>now-p.start<900);
+    for(const p of pings){
+      const k=(now-p.start)/900;
+      cx.strokeStyle=p.col;cx.globalAlpha=1-k;cx.lineWidth=1.5;
+      cx.beginPath();cx.arc(p.x,p.y,4+k*26,0,7);cx.stroke();cx.globalAlpha=1;
+    }
+
+    /* SIMULATED watermark */
+    if(SIM){
+      cx.save();cx.translate(W/2,zone.h/2);cx.rotate(-0.18);
+      cx.fillStyle='rgba(187,154,247,0.09)';cx.font='700 84px JetBrains Mono,monospace';
+      cx.textAlign='center';cx.fillText('SIMULATED',0,30);cx.restore();
+    }
+  }
+
+  /* hover pick */
+  hover=null;
+  if(mouse.x>=0&&mouse.y<(G?G.lane.y:H-160)){
+    let best=15;
+    for(const h of hits){const dd=Math.hypot(h.x-mouse.x,h.y-mouse.y);
+      if(dd<best){best=dd;hover=h}}
+  }
+  const tip=$('#tip');
+  if(hover){
+    const a=hover.a,age=fmtDur((a.closed&&a.closed<=T?a.closed:T)-a.opened);
+    tip.innerHTML=`<b style="color:${attrColor(a)}">#${a.number} · ${a.kind.toUpperCase()}</b>
+      · ${age} old · ${a.attribution}${a.smell.signals.length?' ('+a.smell.signals.join(', ')+')':''}${cur().reopened.has(a.number)?' · <span style="color:var(--red)">reopened</span>':''}
+      <div class="t2">${esc(a.title.slice(0,90))} — @${esc(a.author)} · click for the story</div>`;
+    tip.style.display='block';
+    tip.style.left=Math.min(window.innerWidth-450,mouse.px+14)+'px';
+    tip.style.top=(mouse.py+16)+'px';
+    cv.style.cursor='pointer';
+  } else {tip.style.display='none';cv.style.cursor=dragStrip?'ew-resize':'crosshair'}
+
+  stepTweens();
+  if(Date.now()-lastRailAt>700){
+    lastRailAt=Date.now();
+    if(!sel)renderRail();
+    renderStats();renderFeed();
+  }
+  requestAnimationFrame(draw);
+}
+
+/* ================= controls ================= */
+function setPlaying(v){playing=v;$('#playBtn').textContent=v?'⏸ PAUSE':'▶ REPLAY'}
+function setSim(v){
+  SIM=v;
+  if(SIM&&!SIMDATA)simulate();
+  const b=$('#modeBtn');b.textContent=SIM?'SIM':'LIVE';b.classList.toggle('sim',SIM);
+  sel=null;lastFeedKey='';
+  const d=cur();if(d)T=d.t1;
+  refresh();
+}
+function dismissHint(){if(!hintGone){hintGone=true;const h=$('#hint');h.style.opacity='0';setTimeout(()=>h.remove(),1300)}}
+$('#modeBtn').onclick=()=>{setSim(!SIM)};
+$('#scopeBtn').onclick=()=>{SCOPEI=(SCOPEI+1)%SCOPES.length;$('#scopeBtn').textContent=SCOPES[SCOPEI][1];lastFeedKey='';refresh()};
+$('#playBtn').onclick=()=>{
+  const d=cur();if(!d)return;dismissHint();
+  if(!playing&&T>=d.t1-1500)T=d.t0;
+  setPlaying(!playing);
+};
+$('#scrub').addEventListener('input',e=>{
+  const d=cur();if(!d)return;dismissHint();setPlaying(false);
+  T=d.t0+(e.target.value/1000)*(d.t1-d.t0);lastFeedKey='';
+});
+cv.addEventListener('mousemove',e=>{
+  const r=cv.getBoundingClientRect();
+  mouse={x:e.clientX-r.left,y:e.clientY-r.top,px:e.clientX,py:e.clientY};
+  if(dragStrip)scrubFromX(mouse.x,r);
+});
+cv.addEventListener('mouseleave',()=>{mouse={x:-1,y:-1,px:0,py:0};dragStrip=false});
+cv.addEventListener('mousedown',e=>{
+  const r=cv.getBoundingClientRect(),y=e.clientY-r.top;
+  dismissHint();
+  if(G&&y>G.lane.y){dragStrip=true;setPlaying(false);scrubFromX(e.clientX-r.left,r)}
+});
+window.addEventListener('mouseup',()=>dragStrip=false);
+cv.addEventListener('click',()=>{
+  if(hover){sel=hover.a.number;setPlaying(false);renderInspector()}
+});
+function scrubFromX(x,r){
+  const d=cur();if(!d||!G)return;
+  T=d.t0+Math.min(1,Math.max(0,(x-14-G.fog)/(r.width-28-G.fog)))*(d.t1-d.t0);
+  $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));
+  lastFeedKey='';
+}
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();$('#playBtn').click()}
+  else if(e.key==='l')$('#modeBtn').click();
+  else if(e.key==='s')$('#scopeBtn').click();
+  else if(e.key==='Escape'&&sel){sel=null;renderRail()}
+  else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+    const d=cur();if(!d)return;setPlaying(false);
+    T=Math.min(d.t1,Math.max(d.t0,T+(e.key==='ArrowRight'?DAY:-DAY)));
+    $('#scrub').value=Math.round(1000*(T-d.t0)/(d.t1-d.t0));lastFeedKey='';
+  }
+  dismissHint();
+});
+setTimeout(dismissHint,15000);
+
+/* ================= boot ================= */
+buildStatsBar();
+loadManifest(true);
+setInterval(()=>{if(!SIM)loadManifest(false)},45000);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
