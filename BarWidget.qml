@@ -279,6 +279,20 @@ Panel {
   }
 
   // ------------------------------------------------------------- bar button
+  //
+  // The root's implicit size IS the bar slot. Panel is a bare Item with none of
+  // its own, so without these two lines the slot is zero wide, the button
+  // anchored to fill it fills nothing, and the chip vanishes from the bar —
+  // while the plugin loads cleanly, registers its IPC handler and logs no QML
+  // error anywhere. That is what happened when this file's root changed from
+  // BarWidget to Panel and these came off with it; every sibling that works
+  // (crt, crook, wool) carries the same pair, and so did this file before the
+  // rewrite. A widget that loads and draws nothing looks exactly like a widget
+  // that is not installed, which is why it went unnoticed through a clean
+  // `omarchy plugin validate` and a clean journal.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   WidgetButton {
     id: button
     anchors.fill: parent
@@ -329,9 +343,13 @@ Panel {
           width: parent.width
           title: "Observatory"
           meta: root.active ? root.active.replace("__", "/") : "no project selected"
+          // Short on purpose: PanelHero's detail does not wrap, so a long line
+          // runs off the panel edge rather than eliding. The instruction that
+          // used to live here is the search field's own placeholder two rows
+          // down, where the hand already is.
           detail: root.reachable
             ? results.count + " of " + (root.projects.length + root.found.length)
-              + " · type to filter, or type a path to add a directory"
+              + " repositories"
             : "server not reachable on :" + root.port
           foreground: root.foreground
           fontFamily: root.fontFamily
