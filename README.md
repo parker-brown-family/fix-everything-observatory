@@ -181,7 +181,7 @@ one, and they are not allowed to be the same grey dot.
 | Path | What |
 |---|---|
 | `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `manifest.{json,js}` into the state directory (`$XDG_STATE_HOME`, or `FIX_OBSERVATORY_STATE` to override), serves it at the `/data/` URL the page asks for. Stdlib only. Skips a cycle below 8 API requests remaining. |
-| `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
+| `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. Inside it, `MoteLayer` draws the whole swarm in one instanced WebGL2 call and the frame composites that in a single `drawImage`; everything else — hive, rings, event lane, cumulative flow, sparks — stays on canvas 2D, and the sprite loop remains as the fallback where WebGL2 is missing. |
 | `induction.py` | Discovery and the check battery: walks the search directories for git work trees, reads each remote out of `.git/config` without spawning git, and runs the fifteen ordered checks that decide whether a repository can honestly be watched. Stdlib only. |
 | `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. Left-click ensures the server and opens the swarm; right-click opens the project picker. The widget has no settings and passes no environment to what it launches. |
 | `bin/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
