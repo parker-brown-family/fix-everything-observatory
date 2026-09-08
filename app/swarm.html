@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>We Can Fix Everything — the swarm</title>
+<title>Fix Everything Observatory — the swarm</title>
 <meta name="description" content="Live instrument for the Omarchy repair swarm: agent-smelling tickets, lifespan, volume, closeability — scrub the whole history.">
-<meta property="og:title" content="We Can Fix Everything — the swarm">
-<meta property="og:description" content="every missing app, every incompatibility, every paper cut — watched healing in real time.">
+<meta property="og:title" content="Fix Everything Observatory — the swarm">
+<meta property="og:description" content="Every open ticket in orbit, coloured by what opened it, scrubbable across the repository's whole history.">
 <meta name="theme-color" content="#1a1b26">
 <link rel="icon" href="omarchy-logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -36,13 +36,11 @@
   }
   .logo{width:36px;height:36px;flex:none;image-rendering:auto}
   h1{font-size:15px;font-weight:700;letter-spacing:.14em;color:var(--white);white-space:nowrap}
-  h1 small{display:block;font-size:9px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:2px}
-  .diff{font-size:11px;line-height:1.5;white-space:pre;overflow:hidden;flex:1;min-width:0}
-  .diff .ctx{color:var(--ghost)}
-  .diff del{color:var(--red);text-decoration:line-through;text-decoration-thickness:.06em;display:block}
-  .diff ins{color:var(--green);font-weight:700;text-decoration:none;display:block}
-  .diff .ctx::before{content:"  "} .diff del::before{content:"- ";text-decoration:none} .diff ins::before{content:"+ "}
-  .controls{display:flex;gap:8px;align-items:center;flex:none}
+  /* The wordmark and the controls, and nothing between them. What used to sit
+     here — a strapline, a tagline, and a "watching <repo> repair itself" line
+     carrying the only mouse path to the directory — said in three registers
+     what the strip below now says once, with the project data attached. */
+  .controls{display:flex;gap:8px;align-items:center;flex:none;margin-left:auto}
   button{
     font:inherit;font-size:10.5px;letter-spacing:.08em;padding:6px 11px;cursor:pointer;
     background:transparent;color:var(--cyan);border:1px solid var(--dim);
@@ -218,13 +216,6 @@
 
   /* ===== the observatory directory: what is watched, what is on this machine,
      and whether a candidate can honestly be watched at all ===== */
-  #dirBtn{
-    background:none;border:none;color:var(--white);font:inherit;letter-spacing:.06em;
-    cursor:pointer;padding:0 2px;border-bottom:1px dashed var(--dim);
-  }
-  #dirBtn:hover{color:var(--cyan);border-bottom-color:var(--cyan);background:none}
-  #dirBtn::after{content:" ▾";color:var(--ghost);font-size:9px}
-
   #dir{position:fixed;inset:0;z-index:20;background:rgba(16,16,22,.82);display:none}
   #dir.on{display:block}
   .dcard{
@@ -262,6 +253,38 @@
     padding:14px 18px 18px;border-right:1px solid var(--line);
   }
   .dcol:last-child{border-right:none;background:var(--bg2)}
+
+  /* Three columns need about 260px each, and below that the grid does NOT
+     degrade gracefully on its own: a grid item's automatic minimum is its
+     content, but overflow:auto zeroes that, so the columns keep shrinking
+     past their content and clip it instead of wrapping. Measured in a
+     560px-wide pane: the watching column was handed 164px to render 238px
+     of cards, and the cards lost their right-hand edge with no scrollbar to
+     say so. This is read in tiled panes as often as full screen, so the
+     column count steps down instead. */
+  @media (max-width:1180px){
+    .dcols{grid-template-columns:1fr 1fr}
+    .dcol:nth-child(2){border-right:none}
+    .dcol:last-child{grid-column:1/-1;border-top:1px solid var(--line)}
+  }
+  @media (max-width:860px){
+    .dcard{inset:16px 12px}
+    .dhead{flex-wrap:wrap;gap:5px 12px}
+    .dhead .dsub{flex:1 1 100%;order:3}
+    /* one column, and the CARD scrolls rather than three nested scrollers —
+       stacked panes each with their own scrollbar is a worse place to be
+       lost than one long list. */
+    .dcols{grid-template-columns:1fr;overflow-y:auto}
+    /* min-width:0 is load-bearing, not tidiness. Dropping overflow:auto hands
+       the column its automatic minimum back — the widest thing inside it — and
+       a single "parker-brown-family/" owner then pushed the column 110px wider
+       than the card it sits in. Zero lets the ellipsis do the truncating, which
+       is what .dn and .dm were already written to do. */
+    .dcol{overflow:visible;min-width:0;border-right:none;border-bottom:1px solid var(--line)}
+    .dcol:last-child{grid-column:auto;border-bottom:none;border-top:none}
+    .dcol h3{flex-wrap:wrap}
+    .dempty,.dnote,#drootnote{overflow-wrap:anywhere}
+  }
   .dcol h3{
     margin:0 0 8px;font-size:9.5px;letter-spacing:.16em;color:var(--ghost);font-weight:500;
     display:flex;align-items:center;gap:8px;flex:none;
@@ -354,12 +377,8 @@
 <body>
 <header>
   <img class="logo" src="omarchy-mark-256.png" alt="omarchy">
-  <h1>WE CAN FIX EVERYTHING<small>THE REPAIR SWARM · FIX-EVERYTHING OBSERVATORY</small></h1>
-  <div class="diff"><span class="ctx">watching <button id="dirBtn" title="[p] switch project, or induct any repository on this machine"><span id="repoName">omacom/omarchy</span></button> repair itself</span>
-<del>every missing app, every incompatibility, every paper cut</del>
-<ins>one click · one disposable agent · one merged fix</ins></div>
+  <h1>FIX EVERYTHING OBSERVATORY</h1>
   <div class="controls">
-    <button id="modeBtn" title="[l] live / simulated history">LIVE</button>
     <button id="scopeBtn" title="[s] cycle attribution scope">ALL ARTIFACTS</button>
   </div>
 </header>
@@ -628,7 +647,6 @@ function loadManifest(first){
 /* ================= aggregates ================= */
 function refresh(){
   const d=cur();
-  if(d)$('#repoName').textContent=d.repo;
   if(!d){AGG=null;syncOverlay();renderRail();renderStats();return}
   const rows=visible();
   const span=d.t1-d.t0;
@@ -1280,7 +1298,6 @@ function setSim(v){
   SIM=v;
   fx=[];lastCrossT=null;
   if(SIM&&!SIMDATA)simulate();
-  const b=$('#modeBtn');b.textContent=SIM?'SIM':'LIVE';b.classList.toggle('sim',SIM);
   sel=null;lastFeedKey='';
   const d=cur();if(d)T=d.t1;
   refresh();
@@ -1292,7 +1309,6 @@ function setRate(i){rateI=Math.max(0,Math.min(RATES.length-1,i));$('#rateBtn').t
 $('#rateBtn').onclick=()=>setRate(rateI+1<RATES.length?rateI+1:0);
 $('#toStart').onclick=()=>{const d=cur();if(!d)return;dismissHint();T=d.t0;lastFeedKey=''};
 $('#toEnd').onclick=()=>{const d=cur();if(!d)return;dismissHint();setPlaying(false);T=d.t1};
-$('#modeBtn').onclick=()=>{setSim(!SIM)};
 $('#scopeBtn').onclick=()=>{SCOPEI=(SCOPEI+1)%SCOPES.length;$('#scopeBtn').textContent=SCOPES[SCOPEI][1];lastFeedKey='';refresh()};
 $('#playBtn').onclick=()=>{
   const d=cur();if(!d)return;dismissHint();
@@ -1331,7 +1347,6 @@ document.addEventListener('keydown',e=>{
   if(DIR.open){if(e.key==='Escape'&&document.activeElement!==$('#dq'))closeDir();return}
   if(e.key==='p'){e.preventDefault();openDir();return}
   if(e.code==='Space'){e.preventDefault();$('#playBtn').click()}
-  else if(e.key==='l')$('#modeBtn').click();
   else if(e.key==='s')$('#scopeBtn').click();
   else if(e.key==='+'||e.key==='=')setSpeed(speedI+1);
   else if(e.key==='-'||e.key==='_')setSpeed(speedI-1);
@@ -1579,7 +1594,6 @@ function switchTo(slug){
   lastCrossT=null;lastFeedKey='';visCache={key:'',rows:[]};streamCache={key:'',rows:[]};
   SPRITES.clear();clearTweens();AGG=null;$('#feed').innerHTML='';
   if(SIM)setSim(false);
-  $('#repoName').textContent='…';
   renderStrip();
   closeDir();
   loadManifest(true);
@@ -1672,8 +1686,8 @@ function addRoot(){
    server answers an unknown or stale ?project= with its ACTIVE project
    rather than an error (measured: a bogus slug returns 200 carrying the
    active repository), so the URL is a request, not a fact. Matching tabs
-   on DATA.repo is what keeps the lit tab honest — the same rule
-   #repoName has always followed by rendering d.repo, never the slug.
+   on DATA.repo is what keeps the lit tab honest — the rule the deleted
+   header name followed too, rendering d.repo and never the slug.
    And repo, not the manifest's own slug field, is load-bearing a second
    way: the committed seed was frozen before slug existed, so on a fresh
    install DATA.slug is undefined until the first mine lands. repo is the
@@ -1686,9 +1700,13 @@ function shownSlug(){
 }
 function renderStrip(){
   const el=$('#projstrip'), ps=DIR.projects;
-  // One watched project is not a choice; the strip earns its row only
-  // when there is switching to do. Header name and [p] remain either way.
-  if(!LOCAL_API||ps.length<2){el.className='';el.innerHTML='';return}
+  // The strip renders for ONE watched project too, which it did not have to
+  // when the header carried a "watching <repo>" line: that line held the only
+  // mouse path into the directory, and deleting it left a fresh single-project
+  // install with no way to add a second except a keypress nobody has been told
+  // about. ＋ WATCH ANOTHER lives in the strip, so the strip has to exist
+  // wherever the directory is reachable at all.
+  if(!LOCAL_API||!ps.length){el.className='';el.innerHTML='';return}
   const have=shownSlug(), want=PROJECT;
   el.className='on';
   // The mismatch warning leads the strip rather than trailing it: with
@@ -1728,7 +1746,6 @@ function renderStrip(){
   el.querySelector('.pmore').onclick=openDir;
 }
 
-$('#dirBtn').onclick=openDir;
 $('#dclose').onclick=closeDir;
 $('#dadd').onclick=addRoot;
 $('#drescan').onclick=()=>loadScan(true);
@@ -1765,12 +1782,9 @@ $('#dq').onkeydown=e=>{
 buildStatsBar();
 loadManifest(true);
 // The directory is a local-server surface. Against a hosted copy of this page
-// the button says why it does nothing rather than opening on an empty panel.
-if(!LOCAL_API){
-  $('#dirBtn').title='the project directory needs the local observatory server';
-  $('#dirBtn').style.borderBottomStyle='none';
-  $('#dirBtn').style.cursor='default';
-}else refreshDir();
+// there is nothing to point at, so the strip never renders and there is no
+// control to explain away — renderStrip already returns empty without LOCAL_API.
+if(LOCAL_API)refreshDir();
 setInterval(()=>{
   if(!SIM)loadManifest(false);
   // counts, badges, and projects another tab or the bar widget inducted
