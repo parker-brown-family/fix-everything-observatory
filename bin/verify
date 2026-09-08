@@ -223,14 +223,52 @@ fi
 # clones the repository, so a doc that advertises the removed button ships to
 # every user exactly like code does. bin/verify and the gate script name these
 # strings by necessity and are excluded by path, not by hoping they never match.
+#
+# This matched the four deleted IDENTIFIERS for one day, and passed over two
+# shipped decision documents that described the button in plain English —
+# "It spawns a coding agent", "The inspector's allocate button asks the local
+# server to open a terminal running claude on a ticket" — in the present tense,
+# in a table headed Disclosures. A reviewer greps the word, not the symbol. So
+# it now matches the CLAIM: an allocation or spawn word within four words of
+# "agent" or "claude", either order, joined by spaces or hyphens rather than
+# punctuation. The space-only window is what keeps `spawnFx(...,agent)` and
+# "without spawning git" out of the results, and both are in the tree.
+#
+# History is allowed to say what it said, so a line carrying an explicit
+# removal marker is exempt — that is how the corrected documents keep their
+# record. Tested in four directions before it landed: zero hits on the current
+# tree, all ten false claims caught in the pre-fix documents, seven hostile
+# rephrasings caught, and seven innocent lines from this repository clean.
+alloc_re='(/api/allocate|allowAgentAllocation|FIX_OBSERVATORY_(ALLOW_AGENTS|AGENT_CMD|AGENT_CWD)'
+alloc_re="$alloc_re"'|(allocat|spawn)[a-z]*([- ][a-z]+){0,4}[- ](agent|claude)'
+alloc_re="$alloc_re"'|(agent|claude)([- ][a-z]+){0,4}[- ](allocat|spawn)[a-z]*'
+alloc_re="$alloc_re"'|allocat[a-z]*[- ](button|endpoint))'
 alloc_hits="$(git -C "$root" ls-files -z \
-  | xargs -0 grep -lIiE '/api/allocate|allowAgentAllocation|ALLOCATE[ _-]AGENT|FIX_OBSERVATORY_(ALLOW_AGENTS|AGENT_CMD|AGENT_CWD)' 2>/dev/null \
-  | grep -vE '^(bin/verify|tools/spawn-gate\.py)$' || true)"
+  | xargs -0 grep -nIiE "$alloc_re" 2>/dev/null \
+  | grep -viE 'removed|no longer|superseded|was removed|are gone|goes with them' \
+  | grep -vE '^(bin/verify|tools/spawn-gate\.py):' || true)"
 if [[ -n "$alloc_hits" ]]; then
-  err "the agent-allocation surface is back in tracked files — it was removed under security review"
-  printf '%s\n' "$alloc_hits" | sed 's/^/    /'
+  err "a tracked file claims this plugin allocates or spawns an agent — that was removed under security review. Say it in the past tense, or take the line out"
+  printf '%s\n' "$alloc_hits" | cut -c1-160 | sed 's/^/    /'
 else
-  ok "no agent-allocation surface in any tracked file"
+  ok "no tracked file claims an agent-allocation capability"
+fi
+
+# The README promises "network to api.github.com only", and until 0.2.0 four
+# tracked pages fetched a web font from Google's CDN — which sends the reader's
+# IP to a third party on every open, and is checkable by a listing reviewer in
+# one devtools tab. The promise is now a check. Only fetch-shaped references
+# count: a <link>, a <script src>, or a CSS @import. A documentation link to
+# cli.github.com in prose is not a request and is not the concern here.
+cdn_hits="$(git -C "$root" ls-files -z \
+  | xargs -0 grep -nIioE '<(link|script)[^>]*(href|src)="https?://[a-z0-9.-]+|@import[^;]*url\(.?https?://[a-z0-9.-]+' 2>/dev/null \
+  | grep -viE '://(www\.)?(api\.)?github\.com|://raw\.githubusercontent\.com' \
+  | grep -vE '^bin/verify:' || true)"
+if [[ -n "$cdn_hits" ]]; then
+  err "a tracked page fetches from a third-party host — the README promises api.github.com only"
+  printf '%s\n' "$cdn_hits" | sed 's/^/    /'
+else
+  ok "no tracked page fetches from a third-party host"
 fi
 
 printf '\n\033[1minterface\033[0m\n'
