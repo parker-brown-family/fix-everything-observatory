@@ -1,0 +1,1000 @@
+#!/usr/bin/env python3
+"""queue-collapse — find the distinct work hiding inside a flooded issue queue.
+
+    queue-collapse OWNER/REPO                 # the worklist
+    queue-collapse OWNER/REPO --commands      # the gh commands, printed, never run
+    queue-collapse OWNER/REPO --html out.html # a page you can send someone
+    queue-collapse OWNER/REPO --json out.json # everything, for tooling
+
+Written for a maintainer whose queue is arriving faster than it drains, where the
+expensive thing is no longer deciding — it is discovering that five people already
+sent the same patch.
+
+What it does: reads the open queue through `gh`, groups items that are the same
+piece of work, and for each group names the one pull request worth reading and the
+items that close when it merges.
+
+Three rules it will not break:
+
+  1. READ-ONLY. It never mutates anything. --commands prints commands for a human
+     to read and run; nothing here pipes them anywhere.
+  2. EVERY GROUP SHOWS ITS EVIDENCE. A group you disagree with should cost you
+     five seconds to reject, so the reason is on the row, not in a score.
+  3. UNKNOWN IS NOT ZERO. Items the sample never reached are "unexamined", never
+     "unique". A pull request whose mergeability GitHub has not computed is not
+     reported as conflicting.
+
+It judges tickets, never people. There is no contributor score in here, and the
+only author statistic is how many DISTINCT people reported a surface, which is a
+fact about the bug rather than about them.
+
+Requires: python3 (stdlib only) and `gh` authenticated with read access.
+"""
+import argparse, collections, datetime, html, json, math, os, re, shutil, subprocess, sys, time
+
+GH = shutil.which("gh") or "gh"
+
+# ---------------------------------------------------------------- fetching
+
+ISSUE_Q = """
+query($cursor:String,$q:String!){
+ search(query:$q,type:ISSUE,first:50,after:$cursor){
+  issueCount pageInfo{hasNextPage endCursor}
+  nodes{... on Issue{
+    number title body createdAt url
+    author{login}
+    labels(first:5){nodes{name}}
+    comments{totalCount}
+  }}}}
+"""
+
+PR_Q = """
+query($cursor:String,$q:String!){
+ search(query:$q,type:ISSUE,first:25,after:$cursor){
+  issueCount pageInfo{hasNextPage endCursor}
+  nodes{... on PullRequest{
+    number title body createdAt url isDraft mergeable authorAssociation reviewDecision
+    additions deletions changedFiles
+    author{login}
+    closingIssuesReferences(first:10){nodes{number}}
+    files(first:20){nodes{path}}
+    commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+    reviews(first:0){totalCount}
+    comments{totalCount}
+  }}}}
+"""
+
+SETTLED_PR_Q = """
+query($cursor:String,$q:String!){
+ search(query:$q,type:ISSUE,first:50,after:$cursor){
+  issueCount pageInfo{hasNextPage endCursor}
+  nodes{... on PullRequest{
+    number title body createdAt mergedAt url
+    author{login}
+    files(first:20){nodes{path}}
+    closingIssuesReferences(first:10){nodes{number}}
+  }}}}
+"""
+
+SETTLED_ISSUE_Q = """
+query($cursor:String,$q:String!){
+ search(query:$q,type:ISSUE,first:50,after:$cursor){
+  issueCount pageInfo{hasNextPage endCursor}
+  nodes{... on Issue{
+    number title body createdAt closedAt url stateReason
+    author{login}
+  }}}}
+"""
+
+
+def mergeable_batch_query(numbers):
+    """Search answers UNKNOWN for mergeability because GitHub computes it lazily and
+    a search never asks it to. A direct pullRequest(number:) query does, and answers
+    on the first ask — measured on 30 of omarchy's unknowns, 30 resolved immediately.
+    Aliases let one request carry fifty of them."""
+    body = "\n".join(f"    p{n}: pullRequest(number:{n}){{ number mergeable }}" for n in numbers)
+    return f"query($o:String!,$r:String!){{ repository(owner:$o,name:$r){{\n{body}\n}} }}"
+
+
+def gql(query, variables, tries=3):
+    args = [GH, "api", "graphql", "-f", "query=" + query]
+    for k, v in variables.items():
+        args += ["-f", f"{k}={v}"]
+    for attempt in range(tries):
+        p = subprocess.run(args, capture_output=True, text=True)
+        if p.returncode == 0:
+            try:
+                d = json.loads(p.stdout)
+            except json.JSONDecodeError:
+                time.sleep(3 * (attempt + 1)); continue
+            if "errors" in d:
+                msg = str(d["errors"])[:150]
+                print(f"    ! {msg}", file=sys.stderr)
+                time.sleep(3 * (attempt + 1)); continue
+            return d
+        print(f"    ! {p.stderr.strip()[:150]}", file=sys.stderr)
+        time.sleep(3 * (attempt + 1))
+    return None
+
+
+def harvest(query, q, pages, label):
+    rows, cursor, total = [], None, None
+    for i in range(pages):
+        variables = {"q": q}
+        if cursor:
+            variables["cursor"] = cursor
+        d = gql(query, variables)
+        if not d:
+            break
+        s = d["data"]["search"]
+        total = s["issueCount"]
+        rows += [n for n in s["nodes"] if n]
+        print(f"\r  {label}: {len(rows)}/{min(total, pages * 50)}", end="", file=sys.stderr, flush=True)
+        if not s["pageInfo"]["hasNextPage"]:
+            break
+        cursor = s["pageInfo"]["endCursor"]
+    print(file=sys.stderr)
+    return rows, total
+
+
+def fetch(repo, limit, since_days=45):
+    """Return (issues, prs, settled, coverage). GitHub's search API refuses to page
+    past 1000 results, so coverage records what was NOT looked at.
+
+    `settled` is recently merged pull requests and recently closed issues. They are
+    fetched because the most useful thing to tell someone drowning in a queue is not
+    which open items match each other — it is which open items match something they
+    already shipped.
+    """
+    issues, n_issues = harvest(ISSUE_Q, f"repo:{repo} is:issue is:open sort:created-desc",
+                               limit // 50, "issues")
+    prs, n_prs = harvest(PR_Q, f"repo:{repo} is:pr is:open sort:created-desc",
+                         limit // 25, "pull requests")
+
+    cutoff = (datetime.date.today() - datetime.timedelta(days=since_days)).isoformat()
+    merged, _ = harvest(SETTLED_PR_Q, f"repo:{repo} is:pr is:merged merged:>={cutoff}",
+                        10, f"merged since {cutoff}")
+    closed, _ = harvest(SETTLED_ISSUE_Q,
+                        f"repo:{repo} is:issue is:closed reason:completed closed:>={cutoff}",
+                        10, f"closed since {cutoff}")
+    settled = {"merged": merged, "closed": closed, "since": cutoff}
+
+    unknown = [p["number"] for p in prs if p.get("mergeable") == "UNKNOWN"]
+    if unknown:
+        owner, name = repo.split("/", 1)
+        fixed = {}
+        for i in range(0, len(unknown), 50):
+            chunk = unknown[i:i + 50]
+            d = gql(mergeable_batch_query(chunk), {"o": owner, "r": name})
+            if d:
+                for v in (d["data"]["repository"] or {}).values():
+                    if v and v.get("mergeable") != "UNKNOWN":
+                        fixed[v["number"]] = v["mergeable"]
+            print(f"\r  mergeability: {len(fixed)}/{len(unknown)} resolved",
+                  end="", file=sys.stderr, flush=True)
+        print(file=sys.stderr)
+        for p in prs:
+            if p["number"] in fixed:
+                p["mergeable"] = fixed[p["number"]]
+
+    coverage = {
+        "open_issues_total": n_issues, "open_issues_sampled": len(issues),
+        "open_prs_total": n_prs, "open_prs_sampled": len(prs),
+        "settled_since": cutoff, "merged_sampled": len(merged), "closed_sampled": len(closed),
+        "unexamined": max(0, (n_issues or 0) - len(issues)) + max(0, (n_prs or 0) - len(prs)),
+    }
+    return issues, prs, settled, coverage
+
+
+# ---------------------------------------------------------------- grouping
+
+STOP = set("""a an the of on in to for with when after is are not does doesn cannot and or my it
+this that if but as be by at from was were has have had will would should could there their they
+them then than so no yes you your we our us me he she his her its into out up down over under
+again very just only issue issues bug bugs error errors fail fails failed failing broken break
+breaks work works working please help thanks thank hi hello also still even more most some any all
+one two new old describe description expected actual behavior behaviour steps reproduce
+reproduction version title body report reported reporting open opened close closed fix fixes fixed
+what where which who why how here need needs needed want wants add adds added set sets setting
+settings run runs running start starts started com http https github www org net md sh conf config
+file files system user users using use used make makes made get gets got""".split())
+
+TOK = re.compile(r"[a-z][a-z0-9_.-]{2,}")
+MENTION = re.compile(r"#(\d+)")
+
+
+def tokens(text, cap=None, extra_stop=()):
+    t = (text or "").lower()
+    if cap:
+        t = t[:cap]
+    out = []
+    for w in TOK.findall(t):
+        w = w.strip(".-_")
+        if len(w) < 3 or w in STOP or w in extra_stop or w.isdigit():
+            continue
+        out.append(w)
+    return out
+
+
+class Grouper:
+    """Four kinds of edge, kept apart on purpose.
+
+    closes    a pull request's closingIssuesReferences. Ground truth.
+    mentions  a #1234 in a body pointing at another open item.
+    files     two pull requests touching the same rare file.
+    text      cosine over tf-idf of title (x3) + the first 1500 chars of body.
+
+    Ground truth merges on its own. Everything else must ALSO clear a topical
+    floor, because a passing reference is not a relationship: without that rule an
+    early run produced one 1025-item group that merged a lock-screen focus bug with
+    an unattended-update hang, and it looked like the best result in the file.
+    """
+
+    TEXT_MERGE = 0.55      # text agreement strong enough to merge on its own
+    TOPIC_FLOOR = 0.22     # weaker evidence must clear this to merge anything
+    FILE_RARITY = 5        # a file touched by more PRs than this says nothing
+    FILE_SHARED = 2        # ...and a pair must share this many of them
+    HUB_DEGREE = 6         # above this an item is a bridge, not a member
+
+    def __init__(self, items, repo_words=()):
+        self.items = items
+        self.repo_words = set(repo_words)
+        self.edges = collections.defaultdict(set)
+        self.sim = {}
+
+    def add(self, a, b, kind):
+        if a != b and a in self.items and b in self.items:
+            self.edges[(min(a, b), max(a, b))].add(kind)
+
+    def build(self):
+        items = self.items
+        for n, r in items.items():
+            for t in r["closes"]:
+                self.add(n, t, "closes")
+
+            mentioned = {int(m) for m in MENTION.findall((r["body"] or "")[:2500])}
+            mentioned = {m for m in mentioned if m in items and m != n}
+            issues_named = [m for m in mentioned if items[m]["type"] == "issue"]
+            for t in mentioned:
+                # A patch that names one or two issues is its author telling you what
+                # it is about, and GitHub only records that link when the magic word
+                # is used. "Related to #102" is authorial intent and binds. A patch
+                # naming a dozen issues is a roadmap, and stays a weak signal.
+                authorial = (r["type"] == "pr" and items[t]["type"] == "issue"
+                             and len(issues_named) <= 3)
+                self.add(n, t, "refs" if authorial else "mentions")
+
+        byfile = collections.defaultdict(list)
+        for n, r in items.items():
+            for f in r["files"]:
+                byfile[f].append(n)
+        shared = collections.Counter()
+        for f, ns in byfile.items():
+            if 2 <= len(ns) <= self.FILE_RARITY:
+                for i in range(len(ns)):
+                    for j in range(i + 1, len(ns)):
+                        shared[(min(ns[i], ns[j]), max(ns[i], ns[j]))] += 1
+        for pair, c in shared.items():
+            if c >= self.FILE_SHARED:
+                self.add(pair[0], pair[1], "files")
+
+        self._vectors()
+        self._text_edges()
+        return self._components()
+
+    def _vectors(self):
+        docs = {n: collections.Counter(tokens(r["title"], extra_stop=self.repo_words) * 3
+                                       + tokens(r["body"], 1500, self.repo_words))
+                for n, r in self.items.items()}
+        df = collections.Counter()
+        for tf in docs.values():
+            df.update(tf.keys())
+        N = len(docs) or 1
+        self.df, self.vecs = df, {}
+        for n, tf in docs.items():
+            v = {}
+            for w, c in tf.items():
+                # a term in one document is noise; a term in a fifth of them is the
+                # project's own name and would cluster the entire repository.
+                # The absolute floor matters: on a small queue a fifth is two or
+                # three documents, and without it every word the duplicates share
+                # is discarded as boilerplate — which is exactly the signal.
+                if df[w] < 2 or df[w] > max(20, N * 0.20):
+                    continue
+                v[w] = (1 + math.log(c)) * math.log(N / df[w])
+            norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
+            self.vecs[n] = {w: x / norm for w, x in v.items()}
+
+    def cos(self, a, b):
+        va, vb = self.vecs[a], self.vecs[b]
+        if len(va) > len(vb):
+            va, vb = vb, va
+        return sum(x * vb.get(w, 0.0) for w, x in va.items())
+
+    def _text_edges(self):
+        inv = collections.defaultdict(list)
+        for n, v in self.vecs.items():
+            for w in v:
+                if self.df[w] <= 60:
+                    inv[w].append(n)
+        cand = collections.Counter()
+        for w, ns in inv.items():
+            if len(ns) > 60:
+                continue
+            for i in range(len(ns)):
+                for j in range(i + 1, len(ns)):
+                    cand[(min(ns[i], ns[j]), max(ns[i], ns[j]))] += 1
+        for pair, count in cand.items():
+            if count < 2:
+                continue
+            s = self.cos(*pair)
+            if s >= self.TEXT_MERGE:
+                self.sim[pair] = s
+                self.add(pair[0], pair[1], "text")
+
+    def _components(self):
+        parent = {n: n for n in self.items}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        merging = []
+        for pair, kinds in self.edges.items():
+            s = self.sim.get(pair) or self.cos(*pair)
+            self.sim[pair] = s
+            if kinds & {"closes", "refs", "text"} or s >= self.TOPIC_FLOOR:
+                merging.append(pair)
+
+        degree = collections.Counter()
+        for a, b in merging:
+            degree[a] += 1
+            degree[b] += 1
+        hubs = {n for n, d in degree.items() if d > self.HUB_DEGREE}
+
+        for a, b in merging:
+            if a not in hubs and b not in hubs:
+                union(a, b)
+
+        # a hub joins its single strongest neighbour rather than fusing every
+        # group it touches: one roadmap issue listing thirty tickets would
+        # otherwise merge thirty unrelated surfaces
+        rank = {"closes": 5, "refs": 4, "text": 3, "mentions": 2, "files": 1}
+        for h in sorted(hubs, key=lambda n: degree[n]):
+            best, best_key = None, (0, 0.0)
+            for pair in merging:
+                if h not in pair:
+                    continue
+                other = pair[1] if pair[0] == h else pair[0]
+                if other in hubs:
+                    continue
+                key = (max(rank[k] for k in self.edges[pair]), self.sim[pair])
+                if key > best_key:
+                    best, best_key = other, key
+            if best is not None:
+                union(best, h)
+
+        groups = collections.defaultdict(list)
+        for n in self.items:
+            groups[find(n)].append(n)
+        return {root: members for root, members in groups.items() if len(members) > 1}, find
+
+
+# ---------------------------------------------------------------- planning
+
+def pick_winner(members, items):
+    """Choose the pull request worth reading, and say why in words.
+
+    Eligibility is hard: a draft, a conflicting branch or a failing check cannot
+    be the recommendation no matter how good the patch is. Among what is left the
+    scoring prefers a patch that closes the group's own issues, is green, is
+    focused, and was filed first — first-to-file breaks every tie, because that is
+    what a maintainer would do and it cannot be gamed by rewriting a description.
+    """
+    cands = []
+    for n in members:
+        it = items[n]
+        if it["type"] != "pr" or it["draft"]:
+            continue
+        why = []
+        if it["mergeable"] == "CONFLICTING":
+            continue
+        if it["ci"] == "FAILURE":
+            continue
+        if it["decision"] == "CHANGES_REQUESTED":
+            continue          # somebody with standing already said no
+        score = 0
+        if it["decision"] == "APPROVED":
+            score += 2
+            why.append("approved")
+        closes_here = [c for c in it["closes"] if c in members]
+        if closes_here:
+            score += 3 + len(closes_here) - 1
+            why.append(f"closes {', '.join('#' + str(c) for c in closes_here)}")
+        if it["ci"] == "SUCCESS":
+            score += 2
+            why.append("checks green")
+        elif it["ci"] is None:
+            why.append("no checks configured")
+        # deliberately NOT scoring raw review count: in omarchy 206 open PRs carry a
+        # "review" and nearly all of them are an automated pass, several of which say
+        # it could not review the patch. Only a decision by someone with standing counts.
+        if it["assoc"] in ("MEMBER", "OWNER", "COLLABORATOR", "CONTRIBUTOR"):
+            score += 1
+            why.append("author has landed a patch here before")
+        if any(re.search(r"(^|/)(test|tests|spec|_test)", f) for f in it["files"]):
+            score += 1
+            why.append("touches tests")
+        if it["changed"] and it["changed"] <= 3:
+            score += 1
+            why.append(f"{it['changed']} file{'s' if it['changed'] != 1 else ''}")
+        if (it["additions"] + it["deletions"]) > 400:
+            score -= 1
+            why.append(f"{it['additions'] + it['deletions']} lines, large")
+        if it["mergeable"] == "UNKNOWN":
+            why.append("mergeability not computed")
+        cands.append((score, -_ts(it["created"]), n, why))
+    if not cands:
+        return None, None, []
+    cands.sort(reverse=True)
+    score, _, n, why = cands[0]
+    runner = cands[1][2] if len(cands) > 1 else None
+    return n, runner, why
+
+
+def _ts(iso):
+    return datetime.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+
+
+def confidence(kinds, sims):
+    """How much a group should be trusted, stated as a word rather than a number.
+
+    Ground truth means somebody already wrote the link down. Strong text agreement
+    means the two tickets describe the same failure in the same words. Everything
+    else is a suggestion for a human to look at, and says so.
+    """
+    med = sorted(sims)[len(sims) // 2] if sims else 0.0
+    if kinds.get("closes") or kinds.get("refs"):
+        return "high", med
+    if med >= 0.45 or kinds.get("text", 0) >= max(2, len(sims) // 2):
+        return "high", med
+    if med >= 0.3:
+        return "medium", med
+    return "needs eyes", med
+
+
+def plan(repo, items, groups, find, sims, edges, coverage):
+    out = {"repo": repo, "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+           "coverage": coverage, "groups": [], "free_wins": [], "stuck": [],
+           "conflicting": [], "already_fixed": []}
+
+    grouped, routine = set(), []
+    for root, members in groups.items():
+        settled_members = [n for n in members if items[n].get("settled")]
+        open_members = [n for n in members if not items[n].get("settled")]
+
+        # A pull request and the issues it closes is not duplication, it is the
+        # normal shape of a fix. Counting it as a duplicate inflates the headline
+        # and puts a "close these" line in front of a maintainer for something
+        # GitHub already does on merge.
+        prs_here = [n for n in open_members if items[n]["type"] == "pr"]
+        issues_here = [n for n in open_members if items[n]["type"] == "issue"]
+        if (not settled_members and len(prs_here) == 1 and issues_here
+                and all(i in items[prs_here[0]]["closes"] for i in issues_here)):
+            routine.append({"pr": prs_here[0], "issues": issues_here})
+            continue
+
+        grouped.update(members)
+        kinds = collections.Counter()
+        group_sims = []
+        for pair, ks in edges.items():
+            if find(pair[0]) == root and find(pair[1]) == root:
+                kinds.update(ks)
+                group_sims.append(sims.get(pair, 0.0))
+        conf, med = confidence(kinds, group_sims)
+
+        # A group that already contains merged or closed work is a different
+        # question: not "which of these do I keep" but "does this open item still
+        # need to exist". Telling someone their bug is already fixed when it is not
+        # is worse than saying nothing, so only ground truth or strong agreement
+        # qualifies — a passing mention never does.
+        if settled_members and open_members and conf == "high":
+            shipped = sorted(settled_members, key=lambda n: items[n].get("settled_at") or "")
+            last_fix = max((items[n].get("settled_at") or "") for n in shipped)
+
+            # WHEN the report arrived is the whole question. Filed before the fix
+            # landed, it is very likely superseded and closing it is fair. Filed
+            # AFTER, the fix did not reach that person — it regressed, it has not
+            # shipped to their channel, or it was never the same bug. Closing that
+            # one tells someone their live problem is imaginary.
+            def row(n):
+                # Belonging to the same group is enough to put two items side by
+                # side. It is NOT enough to close somebody's ticket: in this data a
+                # Vivaldi patch and a Brave patch share a file and a regex and are
+                # different bugs. A close is only ever proposed where THIS item links
+                # directly to THIS fix — the author said so, or the text agrees
+                # strongly — never through a chain of intermediates.
+                direct = None
+                for sm in shipped:
+                    pair = (min(n, sm), max(n, sm))
+                    ks = edges.get(pair)
+                    if not ks:
+                        continue
+                    if ks & {"closes", "refs"} or sims.get(pair, 0) >= Grouper.TEXT_MERGE:
+                        direct = sm
+                        break
+                return {"n": n, "type": items[n]["type"], "title": items[n]["title"],
+                        "author": items[n]["author"], "url": items[n]["url"],
+                        "created": items[n]["created"], "linked_directly_to": direct}
+
+            ordered = sorted(open_members, key=lambda n: items[n]["created"])
+            before = [row(n) for n in ordered if items[n]["created"] <= last_fix]
+            after = [row(n) for n in ordered if items[n]["created"] > last_fix]
+            out["already_fixed"].append({
+                "shipped": [{"n": n, "type": items[n]["type"], "title": items[n]["title"],
+                             "settled": items[n]["settled"], "at": items[n].get("settled_at"),
+                             "url": items[n]["url"], "author": items[n]["author"]}
+                            for n in shipped],
+                "last_fix_at": last_fix,
+                "still_open": before + after,
+                "filed_before_the_fix": before,
+                "filed_after_the_fix": after,
+                "evidence": dict(kinds), "confidence": conf,
+                "median_similarity": round(med, 3),
+            })
+            continue
+
+        members = open_members or members
+        if len(members) < 2:
+            continue
+        keep, runner, why = pick_winner(members, items)
+        ordered = sorted(members, key=lambda n: _ts(items[n]["created"]))
+        anchor = next((n for n in ordered if items[n]["type"] == "issue"), ordered[0])
+        entry = {
+            "anchor": anchor, "title": items[anchor]["title"],
+            "size": len(members), "confidence": conf, "median_similarity": round(med, 3),
+            "evidence": dict(kinds),
+            "reporters": len({items[n]["author"] for n in members}),
+            "keep": keep, "keep_reason": why, "runner_up": runner,
+            "issues": [n for n in ordered if items[n]["type"] == "issue"],
+            "prs": [n for n in ordered if items[n]["type"] == "pr"],
+            "members": [{"n": n, **{k: items[n][k] for k in
+                                   ("type", "title", "author", "url", "created", "mergeable", "ci", "draft")}}
+                        for n in ordered],
+        }
+        (out["groups"] if keep else out["stuck"]).append(entry)
+
+    for n, it in items.items():
+        if it["type"] != "pr" or it.get("settled"):
+            continue
+        if it["mergeable"] == "CONFLICTING":
+            out["conflicting"].append({"n": n, "title": it["title"], "author": it["author"],
+                                       "url": it["url"], "created": it["created"],
+                                       "in_group": n in grouped})
+        elif (n not in grouped and not it["draft"] and it["closes"]
+              and it["ci"] in ("SUCCESS", None) and it["mergeable"] == "MERGEABLE"):
+            out["free_wins"].append({"n": n, "title": it["title"], "author": it["author"],
+                                     "url": it["url"], "closes": it["closes"],
+                                     "lines": it["additions"] + it["deletions"],
+                                     "ci": it["ci"], "reviews": it["reviews"]})
+
+    out["groups"].sort(key=lambda g: (-g["size"], g["anchor"]))
+    out["stuck"].sort(key=lambda g: (-g["size"], g["anchor"]))
+    out["free_wins"].sort(key=lambda w: w["lines"])
+    out["conflicting"].sort(key=lambda c: c["created"])
+    out["already_fixed"].sort(key=lambda a: -len(a["still_open"]))
+
+    open_items = {n: it for n, it in items.items() if not it.get("settled")}
+    dupes = sum(g["size"] for g in out["groups"] + out["stuck"])
+    superseded = sum(len(a["still_open"]) for a in out["already_fixed"])
+    paired = sum(1 + len(r["issues"]) for r in routine)
+    distinct = ((len(open_items) - dupes - superseded - paired)
+                + len(out["groups"]) + len(out["stuck"]) + len(routine))
+    out["routine_pairs"] = len(routine)
+    out["summary"] = {
+        "sampled": len(open_items),
+        "patch_plus_its_own_issue": len(routine),
+        "settled_items_compared_against": len(items) - len(open_items),
+        "open_items_duplicating_shipped_work": superseded,
+        "checks_configured": any(it["ci"] for it in items.values() if it["type"] == "pr"),
+        "approved_by_someone_with_standing": sum(
+            1 for it in items.values() if it.get("decision") == "APPROVED"),
+        "distinct_pieces_of_work": distinct,
+        "duplicate_items": dupes - (len(out["groups"]) + len(out["stuck"])),
+        "groups": len(out["groups"]),
+        "groups_without_a_mergeable_patch": len(out["stuck"]),
+        "free_wins": len(out["free_wins"]),
+        "conflicting_prs": len(out["conflicting"]),
+        "unexamined_items": coverage["unexamined"],
+    }
+    return out
+
+
+# ---------------------------------------------------------------- rendering
+
+def render_text(p, width=100):
+    s, cov = p["summary"], p["coverage"]
+    L = []
+    L.append(f"{p['repo']} — {s['sampled']} open items examined, "
+             f"{cov['unexamined']} not reached")
+    L.append("")
+    L.append(f"  {s['distinct_pieces_of_work']} distinct pieces of work")
+    after = sum(len(a["filed_after_the_fix"]) for a in p["already_fixed"])
+    before = sum(len(a["filed_before_the_fix"]) for a in p["already_fixed"])
+    L.append(f"  {before + after} open items match work already closed since "
+             f"{cov.get('settled_since', '?')} — {before} filed before the fix, "
+             f"{after} filed after it")
+    L.append(f"  {s['duplicate_items']} duplicate items, in {s['groups'] + s['groups_without_a_mergeable_patch']} groups")
+    L.append(f"  {s['free_wins']} apply cleanly, close an issue, and duplicate nothing")
+    L.append(f"  {s['conflicting_prs']} pull requests no longer apply to the base")
+    L.append(f"  {s['approved_by_someone_with_standing']} carry an approving review")
+    if not s["checks_configured"]:
+        L.append("")
+        L.append("  No automated checks are configured here, so nothing below is verified by CI.")
+        L.append("  'Applies cleanly' is not 'works' — it is only the cheapest thing to rule out.")
+    L.append("")
+
+    reported_again = [a for a in p["already_fixed"] if a["filed_after_the_fix"]]
+    if reported_again:
+        L.append("── arrived after you closed something on the same surface " + "─" * 25)
+        L.append("   Either the fix did not reach them, or they are a different case on the")
+        L.append("   same surface. Both are worth reading. Neither is safe to close, and no")
+        L.append("   command is generated for anything here.")
+        for a in sorted(reported_again, key=lambda a: -len(a["filed_after_the_fix"]))[:20]:
+            head = a["shipped"][0]
+            L.append("")
+            L.append(f"  {head['title'][:86]}")
+            L.append(f"    closed   #{head['n']} {head['settled']} {(a['last_fix_at'] or '')[:10]}"
+                     + (f" (+{len(a['shipped']) - 1} more)" if len(a["shipped"]) > 1 else ""))
+            for o in a["filed_after_the_fix"][:8]:
+                L.append(f"    since    #{o['n']:<6} {o['created'][:10]} "
+                         f"{o['title'][:52]} @{o['author']}")
+            if len(a["filed_after_the_fix"]) > 8:
+                L.append(f"             … {len(a['filed_after_the_fix']) - 8} more")
+        L.append("")
+
+    superseded = [a for a in p["already_fixed"] if a["filed_before_the_fix"]]
+    if superseded:
+        L.append("── filed before that fix landed, and plausibly superseded by it " + "─" * 19)
+        L.append("   Read one before closing it: the group is a surface, not a diagnosis, and")
+        L.append("   a neighbouring bug in the same file will land here too.")
+        for a in sorted(superseded, key=lambda a: -len(a["filed_before_the_fix"]))[:20]:
+            head = a["shipped"][0]
+            L.append("")
+            L.append(f"  {head['title'][:86]}")
+            L.append(f"    fixed by #{head['n']} {head['settled']} {(a['last_fix_at'] or '')[:10]}")
+            for o in a["filed_before_the_fix"][:8]:
+                L.append(f"    open     #{o['n']:<6} {o['title'][:60]} @{o['author']}")
+            if len(a["filed_before_the_fix"]) > 8:
+                L.append(f"             … {len(a['filed_before_the_fix']) - 8} more")
+        L.append("")
+
+    if p["free_wins"]:
+        L.append("── applies cleanly, closes an issue, duplicates nothing " + "─" * 27)
+        for w in p["free_wins"][:25]:
+            closes = " ".join("#" + str(c) for c in w["closes"])
+            L.append(f"  #{w['n']:<6} {w['title'][:66]}")
+            L.append(f"          {w['lines']} lines · closes {closes} · @{w['author']}")
+        if len(p["free_wins"]) > 25:
+            L.append(f"  … {len(p['free_wins']) - 25} more")
+        L.append("")
+
+    L.append("── the same work, filed more than once " + "─" * 45)
+    for g in p["groups"][:40]:
+        keep = g["keep"]
+        ev = " ".join(f"{k}×{v}" for k, v in sorted(g["evidence"].items(), key=lambda kv: -kv[1]))
+        L.append("")
+        L.append(f"  {g['title'][:88]}")
+        L.append(f"    {g['size']} items · {g['reporters']} reporters · {g['confidence']} · {ev}")
+        L.append(f"    keep   #{keep} — {'; '.join(g['keep_reason']) or 'the only candidate'}")
+        others = [m['n'] for m in g["members"] if m["n"] != keep]
+        L.append(f"    closes {' '.join('#' + str(n) for n in others)}")
+        if g["runner_up"]:
+            L.append(f"    or     #{g['runner_up']}, if you disagree")
+    if len(p["groups"]) > 40:
+        L.append(f"\n  … {len(p['groups']) - 40} more groups")
+
+    if p["stuck"]:
+        L.append("")
+        L.append("── real, reported repeatedly, and nothing mergeable yet " + "─" * 28)
+        for g in p["stuck"][:15]:
+            L.append(f"  {g['title'][:80]}")
+            L.append(f"    {g['size']} items · {g['reporters']} reporters · anchor #{g['anchor']}")
+    return "\n".join(L)
+
+
+def render_commands(p):
+    L = ["# queue-collapse: printed, never executed. Read before running anything.",
+         f"# {p['repo']} · {p['generated']}", ""]
+    superseded = [a for a in p["already_fixed"] if a["filed_before_the_fix"]]
+    if superseded:
+        L.append("# --- filed before a fix landed, and probably superseded by it ---")
+        L.append("# Only items filed BEFORE the fix are here. Anything reported after it")
+        L.append("# is in the report as needing eyes, and no command is generated for it.")
+        shipped_by_n = {s["n"]: s for a in p["already_fixed"] for s in a["shipped"]}
+        wrote_any = False
+        for a in superseded:
+            direct = [o for o in a["filed_before_the_fix"] if o.get("linked_directly_to")]
+            if not direct:
+                continue
+            wrote_any = True
+            L.append(f"\n# {a['shipped'][0]['title'][:90]}")
+            for o in direct:
+                fix = shipped_by_n.get(o["linked_directly_to"], a["shipped"][0])
+                kind = "pr" if o["type"] == "pr" else "issue"
+                tail = ("please reopen if this is still needed"
+                        if o["type"] == "pr" else "please reopen if you are still seeing it")
+                note = (f"This looks like it was fixed by #{fix['n']}, "
+                        f"{fix['settled']} on {(fix['at'] or '')[:10]}, after this was filed. "
+                        f"Closing on that basis — {tail}.")
+                L.append(f'gh {kind} close {o["n"]} -R {p["repo"]} -c "{note}"')
+        if not wrote_any:
+            L.append("# (none: no open item links directly enough to a fix to propose closing it)")
+        L.append("")
+    L.append("# --- groups: keep one patch, close what it supersedes ---")
+    for g in p["groups"]:
+        if g["confidence"] != "high":
+            continue
+        L.append(f"\n# {g['title'][:90]}")
+        L.append(f"#   {g['size']} items, {g['reporters']} reporters, confidence {g['confidence']}")
+        keep = g["keep"]
+        for m in g["members"]:
+            if m["n"] == keep:
+                continue
+            kind = "pr" if m["type"] == "pr" else "issue"
+            note = (f"Superseded by #{keep}, which carries the fix for this. "
+                    f"Grouped with {g['size'] - 1} other reports of the same failure.")
+            L.append(f'gh {kind} close {m["n"]} -R {p["repo"]} -c "{note}"')
+    L.append("\n# --- pull requests that no longer apply to the base ---")
+    for c in p["conflicting"][:200]:
+        L.append(f'# {c["title"][:80]}')
+        L.append(f'gh pr close {c["n"]} -R {p["repo"]} -c "Closing: this no longer applies to main. '
+                 f'Please reopen with a rebase if it is still needed."')
+    return "\n".join(L)
+
+
+def render_html(p):
+    e = html.escape
+    s = p["summary"]
+    def _fixed_section(entries, key, css, lead):
+        out = []
+        for a in sorted(entries, key=lambda a: -len(a[key]))[:60]:
+            head = a["shipped"][0]
+            opens = "".join(
+                f'<li><a href="{e(o["url"])}">#{o["n"]}</a> '
+                f'<span class="a">{e(o["created"][:10])}</span> '
+                f'<span class="t">{e(o["title"][:88])}</span> '
+                f'<span class="a">@{e(o["author"])}</span></li>' for o in a[key])
+            out.append(f"""
+<section class="g {css}">
+ <h3>{e(head['title'][:110])}</h3>
+ <p class="keep">{lead} <b><a href="{e(head['url'])}">#{head['n']}</a></b> —
+    {e(head['settled'])} {e((a['last_fix_at'] or '')[:10])}</p>
+ <p class="meta">{len(a[key])} open · <span class="conf high">{a['confidence']}</span></p>
+ <ul>{opens}</ul>
+</section>""")
+        return "".join(out)
+
+    again = [a for a in p["already_fixed"] if a["filed_after_the_fix"]]
+    before = [a for a in p["already_fixed"] if a["filed_before_the_fix"]]
+    fixed_rows = ""
+    if again:
+        fixed_rows += ('<h2>Arrived after you closed something on this surface</h2>'
+                       '<p class="lead">Either the fix did not reach them, or they are a '
+                       'different case on the same surface. Both are worth reading; neither is '
+                       'safe to close, and no command is generated for anything here.</p>'
+                       + _fixed_section(again, "filed_after_the_fix", "regressed", "closed"))
+    if before:
+        fixed_rows += ('<h2>Filed before that fix landed</h2><p class="lead">Plausibly superseded '
+                       'by it, and the ones it is fair to close — after reading one. A group is a '
+                       'surface, not a diagnosis: a neighbouring bug in the same file lands here '
+                       'too.</p>'
+                       + _fixed_section(before, "filed_before_the_fix", "fixed", "fixed by"))
+
+    rows = []
+    for g in p["groups"][:120]:
+        members = "".join(
+            f'<li class="{"keep" if m["n"] == g["keep"] else ""}">'
+            f'<a href="{e(m["url"])}">#{m["n"]}</a> '
+            f'<span class="t">{e(m["title"][:96])}</span> '
+            f'<span class="a">@{e(m["author"])}</span></li>'
+            for m in g["members"])
+        ev = " · ".join(f"{k} ×{v}" for k, v in sorted(g["evidence"].items(), key=lambda kv: -kv[1]))
+        rows.append(f"""
+<section class="g">
+ <h3>{e(g['title'][:110])}</h3>
+ <p class="meta"><b>{g['size']}</b> items · <b>{g['reporters']}</b> reporters ·
+    <span class="conf {g['confidence'].replace(' ', '-')}">{g['confidence']}</span> · {e(ev)}</p>
+ <p class="keep">keep <b>#{g['keep']}</b> — {e('; '.join(g['keep_reason']) or 'the only candidate')}</p>
+ <ul>{members}</ul>
+</section>""")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(p['repo'])} — collapse worklist</title><style>
+:root{{color-scheme:dark;--bg:#111110;--p:#1a1a19;--l:#3a3a36;--t:#fff;--m:#8b8a80;--s:#c3c2b7;
+--ok:#0ca30c;--warn:#fab219;--crit:#d03b3b;--link:#3987e5;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--sans:ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--t);font:15px/1.6 var(--sans)}}
+.wrap{{max-width:1080px;margin:0 auto;padding:36px 22px 90px}}
+h1{{font-size:29px;margin:0 0 6px;letter-spacing:-.02em}}
+.sub{{color:var(--m);font-family:var(--mono);font-size:12px;margin:0 0 26px}}
+.tiles{{display:grid;grid-template-columns:repeat(5,1fr);gap:11px;margin-bottom:34px}}
+@media(max-width:860px){{.tiles{{grid-template-columns:repeat(2,1fr)}}}}
+.tile{{background:var(--p);border:1px solid var(--l);border-radius:9px;padding:14px 15px}}
+.tile b{{display:block;font-size:28px;color:var(--warn);line-height:1.1}}
+.tile span{{display:block;font:11px/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--m);margin-bottom:8px}}
+h2{{font:12px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--m);
+border-bottom:1px solid var(--l);padding-bottom:9px;margin:44px 0 16px}}
+.g{{background:var(--p);border:1px solid var(--l);border-radius:9px;padding:14px 18px;margin-bottom:11px}}
+.g.fixed{{border-left:3px solid var(--ok)}}
+.g.regressed{{border-left:3px solid var(--crit)}}
+.lead{{color:var(--s);margin:-4px 0 16px;font-size:14px;max-width:76ch}}
+.g h3{{margin:0 0 7px;font-size:16px;letter-spacing:-.01em}}
+.meta{{margin:0 0 6px;color:var(--m);font-size:13px}}
+.keep{{margin:0 0 9px;font-size:13.5px;color:var(--s)}}.keep b{{color:var(--ok)}}
+.conf{{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;padding:2px 6px;border-radius:4px}}
+.conf.high{{background:rgba(12,163,12,.18);color:#6cd46c}}
+.conf.medium{{background:rgba(250,178,25,.15);color:#f5c95f}}
+.conf.needs-eyes{{background:rgba(208,59,59,.15);color:#f08a8a}}
+ul{{margin:0;padding:0;list-style:none;font-size:13.5px}}
+li{{padding:3px 0;border-top:1px solid rgba(255,255,255,.05);color:var(--s)}}
+li.keep{{color:var(--t)}}li.keep a{{color:var(--ok);font-weight:600}}
+a{{color:var(--link);text-decoration:none;font-family:var(--mono);font-size:12.5px}}
+.a{{color:var(--m);font-size:12px}}
+footer{{margin-top:60px;padding-top:20px;border-top:1px solid var(--l);color:var(--m);
+font:11.5px/1.7 var(--mono)}}
+</style></head><body><div class="wrap">
+<h1>{e(p['repo'])}</h1>
+<p class="sub">collapse worklist · {e(p['generated'])} · read-only, nothing was changed</p>
+<div class="tiles">
+ <div class="tile"><span>distinct pieces of work</span><b>{s['distinct_pieces_of_work']}</b></div>
+ <div class="tile"><span>duplicate items</span><b>{s['duplicate_items']}</b></div>
+ <div class="tile"><span>match work already closed</span><b>{s['open_items_duplicating_shipped_work']}</b></div>
+ <div class="tile"><span>applies cleanly, closes an issue</span><b>{s['free_wins']}</b></div>
+ <div class="tile"><span>no longer apply to base</span><b>{s['conflicting_prs']}</b></div>
+</div>
+{fixed_rows}
+<h2>The same work, filed more than once</h2>
+{''.join(rows)}
+<footer><p>{s['sampled']} open items examined · {s['unexamined_items']} not reached (GitHub's search
+API stops at 1000 per query; those items are unexamined, not unique)</p>
+<p>{"No automated checks are configured in this repository, so nothing here is verified by CI: "
+   "&#8220;applies cleanly&#8221; is not &#8220;works&#8221;." if not s['checks_configured'] else
+   "Check state is read from the head commit of each pull request."}
+{s['approved_by_someone_with_standing']} of the pull requests examined carry an approving review.</p>
+<p>Groups are connected components over five kinds of evidence. A patch that closes or names an
+issue merges on its own; weaker evidence must also agree on topic. Every group shows what formed
+it so you can reject one at a glance.</p>
+<p>A group is a <b>surface</b>, not a diagnosis. Two reports about the same file and the same
+symptom land together even when the underlying causes differ — checked by hand on this data, one
+group paired a merged fix for one vendor's hardware with open reports about another vendor's.
+That is why nothing is closed for you, and why the only generated commands are for items filed
+before the fix they match.</p></footer>
+</div></body></html>"""
+
+
+# ---------------------------------------------------------------- main
+
+def _ci_state(pr):
+    """None means no checks are configured, which is not the same as no result.
+    Neither is reported as a failure."""
+    nodes = (pr.get("commits") or {}).get("nodes") or []
+    if not nodes:
+        return None
+    commit = nodes[0].get("commit") or {}
+    rollup = commit.get("statusCheckRollup")
+    return rollup.get("state") if rollup else None
+
+
+def normalise(issues, prs, settled=None):
+    items = {}
+    for r in (settled or {}).get("merged", []):
+        items[r["number"]] = {
+            "type": "pr", "settled": "merged", "settled_at": r.get("mergedAt"),
+            "title": r.get("title") or "", "body": r.get("body") or "",
+            "author": (r.get("author") or {}).get("login") or "?", "url": r.get("url", ""),
+            "created": r["createdAt"],
+            "closes": [c["number"] for c in ((r.get("closingIssuesReferences") or {}).get("nodes") or [])],
+            "files": [f["path"] for f in ((r.get("files") or {}).get("nodes") or [])],
+            "draft": False, "mergeable": None, "ci": None, "assoc": None, "decision": None,
+            "reviews": 0, "additions": 0, "deletions": 0, "changed": 0,
+        }
+    for r in (settled or {}).get("closed", []):
+        items[r["number"]] = {
+            "type": "issue", "settled": "closed", "settled_at": r.get("closedAt"),
+            "title": r.get("title") or "", "body": r.get("body") or "",
+            "author": (r.get("author") or {}).get("login") or "?", "url": r.get("url", ""),
+            "created": r["createdAt"], "closes": [], "files": [],
+            "draft": False, "mergeable": None, "ci": None, "assoc": None, "decision": None,
+            "reviews": 0, "additions": 0, "deletions": 0, "changed": 0,
+        }
+    for r in issues:
+        items[r["number"]] = {
+            "type": "issue", "settled": None,
+            "title": r.get("title") or "", "body": r.get("body") or "",
+            "author": (r.get("author") or {}).get("login") or "?", "url": r.get("url", ""),
+            "created": r["createdAt"], "closes": [], "files": [],
+            "draft": False, "mergeable": None, "ci": None, "assoc": None, "decision": None,
+            "reviews": 0, "additions": 0, "deletions": 0, "changed": 0,
+        }
+    for r in prs:
+        items[r["number"]] = {
+            "type": "pr", "settled": None,
+            "title": r.get("title") or "", "body": r.get("body") or "",
+            "author": (r.get("author") or {}).get("login") or "?", "url": r.get("url", ""),
+            "created": r["createdAt"],
+            "closes": [c["number"] for c in ((r.get("closingIssuesReferences") or {}).get("nodes") or [])],
+            "files": [f["path"] for f in ((r.get("files") or {}).get("nodes") or [])],
+            "draft": r.get("isDraft", False), "mergeable": r.get("mergeable"),
+            "ci": _ci_state(r),
+            "assoc": r.get("authorAssociation"),
+            "decision": r.get("reviewDecision"),
+            "reviews": (r.get("reviews") or {}).get("totalCount", 0),
+            "additions": r.get("additions", 0), "deletions": r.get("deletions", 0),
+            "changed": r.get("changedFiles", 0),
+        }
+    return items
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Find the distinct work hiding inside a flooded issue queue. Read-only.")
+    ap.add_argument("repo", help="owner/name")
+    ap.add_argument("--limit", type=int, default=1000,
+                    help="items to examine per type (GitHub's search ceiling is 1000)")
+    ap.add_argument("--since", type=int, default=45, metavar="DAYS",
+                    help="how far back to read shipped work, to catch open items that duplicate it")
+    ap.add_argument("--commands", action="store_true", help="print gh commands; runs nothing")
+    ap.add_argument("--html", metavar="FILE", help="write a page")
+    ap.add_argument("--json", metavar="FILE", help="write the full plan")
+    ap.add_argument("--cache", metavar="FILE", help="reuse a previous fetch instead of the network")
+    args = ap.parse_args()
+
+    if args.cache and os.path.exists(args.cache):
+        raw = json.loads(open(args.cache).read())
+        issues, prs, coverage = raw["issues"], raw["prs"], raw["coverage"]
+        settled = raw.get("settled")
+        print(f"  cache: {len(issues)} issues, {len(prs)} pull requests", file=sys.stderr)
+        if settled is None:      # cache predates the shipped-work comparison
+            cutoff = (datetime.date.today() - datetime.timedelta(days=args.since)).isoformat()
+            merged, _ = harvest(SETTLED_PR_Q, f"repo:{args.repo} is:pr is:merged merged:>={cutoff}",
+                                10, f"merged since {cutoff}")
+            closed, _ = harvest(SETTLED_ISSUE_Q,
+                                f"repo:{args.repo} is:issue is:closed reason:completed closed:>={cutoff}",
+                                10, f"closed since {cutoff}")
+            settled = {"merged": merged, "closed": closed, "since": cutoff}
+            coverage.update({"settled_since": cutoff, "merged_sampled": len(merged),
+                             "closed_sampled": len(closed)})
+            raw["settled"], raw["coverage"] = settled, coverage
+            open(args.cache, "w").write(json.dumps(raw))
+    else:
+        print(f"reading {args.repo} …", file=sys.stderr)
+        issues, prs, settled, coverage = fetch(args.repo, args.limit, args.since)
+        if args.cache:
+            open(args.cache, "w").write(json.dumps({"issues": issues, "prs": prs,
+                                                    "settled": settled, "coverage": coverage}))
+
+    items = normalise(issues, prs, settled)
+    repo_words = set(re.findall(r"[a-z]+", args.repo.lower()))
+    g = Grouper(items, repo_words)
+    groups, find = g.build()
+    p = plan(args.repo, items, groups, find, g.sim, g.edges, coverage)
+
+    if args.json:
+        open(args.json, "w").write(json.dumps(p, indent=1))
+        print(f"wrote {args.json}", file=sys.stderr)
+    if args.html:
+        open(args.html, "w").write(render_html(p))
+        print(f"wrote {args.html}", file=sys.stderr)
+    print(render_commands(p) if args.commands else render_text(p))
+
+
+if __name__ == "__main__":
+    main()
