@@ -71,7 +71,16 @@
   #dataage{font-size:10px;color:var(--ghost)}
 
   main{display:grid;grid-template-columns:1fr 324px;min-height:0}
-  #stage{position:relative;min-width:0}
+  /* min-height:0 is load-bearing, and its absence only shows on a HiDPI screen.
+     A grid item's automatic minimum height is its content's min-content height,
+     and a canvas's min-content height is its HEIGHT ATTRIBUTE in CSS pixels. So
+     the stage could never shrink below the backing store sizeCanvas() had just
+     written — and since that store is laid-out height x devicePixelRatio, every
+     frame multiplied the floor again: 793px of stage became 12,683px in about
+     six frames at dpr 1.6, pushing the event lane and the whole cumulative flow
+     diagram off the bottom of the window. At dpr 1 the multiply is x1 and the
+     bug is perfectly invisible, which is why it shipped. */
+  #stage{position:relative;min-width:0;min-height:0}
   canvas{width:100%;height:100%;display:block}
   aside{
     border-left:1px solid var(--line); background:var(--bg2);
@@ -86,8 +95,8 @@
   .kv b.g{color:var(--green)} .kv b.r{color:var(--red)} .kv b.y{color:var(--yellow)}
   .kv b.c{color:var(--cyan)} .kv b.v{color:var(--violet)}
   .fogchip{
-    background:repeating-linear-gradient(45deg,transparent 0 4px,rgba(65,72,104,.45) 4px 6px);
-    border:1px dashed var(--dim); padding:5px 8px; color:#9aa5ce; margin-top:6px; font-size:10.5px; line-height:1.45;
+    background:repeating-linear-gradient(45deg,transparent 0 4px,color-mix(in srgb,var(--dim) 45%,transparent) 4px 6px);
+    border:1px dashed var(--dim); padding:5px 8px; color:color-mix(in srgb,var(--fg) 72%,var(--ghost)); margin-top:6px; font-size:10.5px; line-height:1.45;
   }
   .err{color:var(--red);margin-top:6px;font-size:10.5px;word-break:break-all}
   /* an unmeasured value. Never a 0, never a blank — a person has to be able to
@@ -116,7 +125,7 @@
   .ev.reopened::before{background:var(--red)} .ev.labeled::before{background:var(--dim)}
   .ev .t{color:var(--ghost);font-size:9.5px;margin-right:6px}
   .ev .who{color:var(--blue)}
-  .ev .snip{color:#9aa5ce;display:block;margin-top:1px}
+  .ev .snip{color:color-mix(in srgb,var(--fg) 72%,var(--ghost));display:block;margin-top:1px}
   a.ghlink{color:var(--cyan);font-size:11px;text-decoration-thickness:.08em;text-underline-offset:.2em}
 
   footer{
@@ -136,7 +145,7 @@
   #clock b{color:var(--white);letter-spacing:.08em;font-weight:700}
   .legend{font-size:9.5px;color:var(--ghost);white-space:nowrap;min-width:0;overflow:hidden}
   #legendChip{position:absolute;right:12px;top:10px;z-index:3;
-    background:rgba(22,22,30,.7);border:1px solid var(--line);padding:5px 10px 6px}
+    background:color-mix(in srgb,var(--bg2) 70%,transparent);border:1px solid var(--line);padding:5px 10px 6px}
   .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
   .sw.hatch{background:repeating-linear-gradient(45deg,transparent 0 2px,var(--dim) 2px 4px);border:1px solid var(--dim)}
 
@@ -154,7 +163,7 @@
   }
   .feedrow{
     display:flex;gap:7px;align-items:baseline;padding:3px 8px;margin-top:2px;
-    background:rgba(31,35,53,.82);border-left:2px solid var(--dim);
+    background:color-mix(in srgb,var(--panel) 82%,transparent);border-left:2px solid var(--dim);
     cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
     animation:slidein .25s ease-out;
   }
@@ -168,12 +177,12 @@
   .feedrow.reopened{border-left-color:var(--red)} .feedrow.reopened .fx{color:var(--red)}
   .feedrow.labeled,.feedrow.referenced,.feedrow.review_requested,.feedrow.ready_for_review{border-left-color:var(--dim)}
   .feedrow.dimrow{opacity:.55;cursor:default}
-  .feedrow:hover{background:rgba(42,47,68,.92)}
+  .feedrow:hover{background:color-mix(in srgb,var(--line) 92%,transparent)}
 
   #hint{
     position:absolute;left:50%;bottom:196px;transform:translateX(-50%);
     color:var(--ghost);font-size:10.5px;letter-spacing:.06em;z-index:3;
-    background:rgba(22,22,30,.7);padding:5px 14px;border:1px solid var(--line);
+    background:color-mix(in srgb,var(--bg2) 70%,transparent);padding:5px 14px;border:1px solid var(--line);
     transition:opacity 1.2s;pointer-events:none;white-space:nowrap;
   }
   #tip{
@@ -303,7 +312,7 @@
 
   /* ===== the observatory directory: what is watched, what is on this machine,
      and whether a candidate can honestly be watched at all ===== */
-  #dir{position:fixed;inset:0;z-index:20;background:rgba(16,16,22,.82);display:none}
+  #dir{position:fixed;inset:0;z-index:20;background:color-mix(in srgb,var(--bg2) 82%,transparent);display:none}
   #dir.on{display:block}
   .dcard{
     position:absolute;inset:36px 30px;background:var(--bg);border:1px solid var(--dim);
@@ -411,7 +420,7 @@
      uses for an artifact nobody scored, so the two read as the one idea */
   .dbadge.unmined{
     border-color:var(--dim);color:var(--ghost);
-    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.45) 3px 6px);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,color-mix(in srgb,var(--dim) 45%,transparent) 3px 6px);
   }
   .dempty{font-size:10.5px;color:var(--ghost);line-height:1.6;padding:6px 2px}
 
@@ -436,7 +445,7 @@
   .verdict.degraded{color:var(--yellow);border-color:var(--yellow)}
   .verdict.blocked{color:var(--red);border-color:var(--red)}
   .verdict.unknown{color:var(--ghost);border-color:var(--dim);
-    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.4) 3px 6px)}
+    background:repeating-linear-gradient(45deg,transparent 0 3px,color-mix(in srgb,var(--dim) 40%,transparent) 3px 6px)}
   .chk{display:flex;gap:9px;padding:6px 0;border-top:1px solid var(--line);font-size:10.5px;line-height:1.55}
   .chk .mark{flex:none;width:13px;text-align:center;font-weight:700}
   .chk.ok .mark{color:var(--green)} .chk.warn .mark{color:var(--yellow)}
@@ -449,7 +458,7 @@
   .chk .det{color:var(--ghost);display:block;white-space:pre-line;overflow-wrap:anywhere}
   .chk>span:last-child{min-width:0}
   #dreport .dpath{overflow-wrap:anywhere}
-  .chk.fail .det,.chk.warn .det{color:#9aa5ce}
+  .chk.fail .det,.chk.warn .det{color:color-mix(in srgb,var(--fg) 72%,var(--ghost))}
   .chk .fixhint{display:block;margin-top:3px;color:var(--cyan)}
   .dact{margin:16px 0 4px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
   .dact button{padding:7px 14px 8px;font-size:11px;letter-spacing:.1em}
@@ -542,6 +551,81 @@ const C=n=>CSS.getPropertyValue('--'+n).trim();
 const COL={bg:C('bg'),bg2:C('bg2'),panel:C('panel'),line:C('line'),dim:C('dim'),ghost:C('ghost'),
   fg:C('fg'),blue:C('blue'),cyan:C('cyan'),green:C('green'),red:C('red'),
   yellow:C('yellow'),violet:C('violet'),white:C('white')};
+
+/* ================= the desktop's palette =================
+   This is an Omarchy instrument running on an Omarchy desktop, so it wears
+   what the desktop is wearing. The server reads the theme the machine is
+   currently in — one known file, read only — and the fourteen tokens above are
+   rewritten from it; everything the canvas paints is then re-derived, because
+   half the frame used to be hard-coded Tokyo Night rgba() literals that a new
+   palette would have left behind as blue smears on a magenta ground.
+
+   A theme that is missing, unreadable, or silent about a colour changes
+   nothing: the built-in Tokyo Night value stays. An absent theme is not a
+   black one, and a page that is only half re-coloured is worse than one that
+   was never re-coloured at all. */
+function hexRgb(h){
+  const s=String(h||'').trim().replace('#','');
+  if(s.length===3)return [0,1,2].map(i=>parseInt(s[i]+s[i],16));
+  if(s.length>=6)return [0,2,4].map(i=>parseInt(s.slice(i,i+2),16));
+  return null;
+}
+function withA(c,a){const p=hexRgb(c);return p?`rgba(${p[0]},${p[1]},${p[2]},${a})`:c}
+/* Every colour the frame paints that is not simply one of the tokens. Rebuilt
+   whenever the palette moves, so there is nowhere for an old hue to hide. */
+let PAL={};
+function syncPalette(){
+  for(const k in COL)COL[k]=C(k);
+  PAL={
+    glowIn:withA(COL.blue,0.07), glowOut:withA(COL.blue,0),
+    hive:withA(COL.blue,0.55),   hiveOut:withA(COL.blue,0.18),
+    ageRing:withA(COL.dim,0.55), hatch:withA(COL.dim,0.5),
+    laneNow:withA(COL.cyan,0.8), laneWas:withA(COL.cyan,0.22),
+    laneAhead:withA(COL.dim,0.3),
+    bandMerged:withA(COL.green,0.5), bandClosed:withA(COL.ghost,0.45),
+    bandOpen:withA(COL.yellow,0.38), openLine:withA(COL.yellow,0.9),
+    mergedInk:withA(COL.green,0.95), closedInk:withA(COL.ghost,0.95),
+    quiet:withA(COL.fg,0.72),
+    cursor:withA(COL.white,0.85), cursorInk:withA(COL.white,0.75),
+  };
+  SPRITES.clear();          // every sprite bakes a colour into its bitmap
+  MoteLayer.repaint();      // and every instance bakes one into the buffer
+}
+
+/* The Omarchy colours, by the role each one plays here. The names on the left
+   are this page's; the ones on the right are the theme file's, and they mean
+   the same thing in a light theme as in a dark one — `bright_foreground` is
+   the strongest text either way, `dark_foreground` the faintest. That is why
+   the light themes need no second mapping. */
+const THEME_MAP={
+  bg:'background', bg2:'dark_background', panel:'lighter_background',
+  line:'selection', dim:'muted', ghost:'dark_foreground',
+  fg:'foreground', white:'bright_foreground',
+  blue:'blue', cyan:'cyan', green:'green', red:'red',
+  yellow:'yellow', violet:'magenta',
+};
+// The theme currently applied, as a fingerprint of everything that could
+// change it — a name alone would miss a theme edited in place.
+let THEME_KEY=null;
+function applyTheme(t){
+  if(!t||!t.name||!t.colors)return;                 // absence changes nothing
+  const key=t.name+'|'+JSON.stringify(t.colors)+'|'+t.mode;
+  if(key===THEME_KEY)return;                       // a repaint per 45s timer, no
+  THEME_KEY=key;
+  const root=document.documentElement;
+  for(const [tok,src] of Object.entries(THEME_MAP)){
+    const v=t.colors[src];
+    if(v)root.style.setProperty('--'+tok,v);        // a missing one keeps its default
+  }
+  if(t.mode)root.style.setProperty('color-scheme',t.mode);
+  syncPalette();
+  const meta=document.querySelector('meta[name=theme-color]');
+  if(meta&&t.colors.background)meta.setAttribute('content',t.colors.background);
+}
+function loadTheme(){
+  if(!LOCAL_API)return Promise.resolve();           // a hosted copy has no desktop
+  return fetch('/api/theme').then(r=>r.ok?r.json():null).then(applyTheme).catch(()=>{});
+}
 const DAY=864e5, WK=7*DAY;
 const DOW=['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
 function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -1005,14 +1089,64 @@ function moteSprite(col,attribution,isPR,r,reo,dpr){
 }
 function hatch(x,y,w,h){
   cx.save();cx.beginPath();cx.rect(x,y,w,h);cx.clip();
-  cx.strokeStyle='rgba(65,72,104,0.5)';cx.lineWidth=1;cx.beginPath();
+  cx.strokeStyle=PAL.hatch;cx.lineWidth=1;cx.beginPath();
   for(let i=-h;i<w;i+=6){cx.moveTo(x+i,y+h);cx.lineTo(x+i+h,y)}
   cx.stroke();cx.restore();
 }
 function diamond(x,y,r){cx.beginPath();cx.moveTo(x,y-r);cx.lineTo(x+r,y);cx.lineTo(x,y+r);cx.lineTo(x-r,y);cx.closePath()}
+/* The swarm is an ellipse, not a circle: an orbit of radius r is drawn 1.45r
+   wide and 0.75r tall, a mote wobbles ±WOBBLE off its orbit, and the mote
+   itself is a disc with a glow around it. RIM is the widest any single mote can
+   be drawn from its own centre — the same number moteSprite() uses for its
+   sprite's half size, and the same one the shader uses for its quad.
+
+   The old cap, min(w*0.38, h*0.42), was a cap on r and therefore said nothing
+   about the width actually painted: 0.38w of radius becomes 0.55w of ellipse,
+   so the swarm was 1.1x the stage and ran off both sides of it. That is
+   invisible on a wide window, where the height term binds first and the result
+   fits by luck, and unmissable in a tiled pane. Cap the DRAWN extent instead,
+   and keep the old height term so a wide window looks exactly as it did. */
+const ORBIT_X=1.45, ORBIT_Y=0.75, WOBBLE=4, RIM=23;
+function swarmRmax(zone){
+  const fitX=(zone.w/2-RIM)/ORBIT_X-WOBBLE;
+  const fitY=(zone.h/2-RIM)/ORBIT_Y-WOBBLE;
+  // The floor is zero, not a comfortable minimum. A minimum radius is a
+  // minimum radius the stage might not have room for, and then the fit rule
+  // above is not a rule — it is a preference that the narrowest pane, the one
+  // case this exists for, overrides. Squeezed to nothing the swarm collapses
+  // onto its hive, which is legible; drawn past the edge it is not.
+  return Math.max(0,Math.min(zone.h*0.42,fitX,fitY));
+}
 function radiusOf(ageDays,zone,band){
-  const rmax=Math.min(zone.w*0.38,zone.h*0.42);
-  return Math.min(rmax,26+24*Math.log2(1+ageDays)+band*20);
+  return Math.min(swarmRmax(zone),26+24*Math.log2(1+ageDays)+band*20);
+}
+/* ---- the mark at the centre of the swarm ----------------------------------
+   The swarm orbits its project, so the project's own logo is what it orbits.
+   Only Omarchy has one here, because only Omarchy's is a file in this
+   repository — a mark for an arbitrary watched repo would mean fetching an
+   avatar from github.com, and this page's whole promise is that it talks to
+   nothing. A project with no mark keeps the plain rings it always had; there is
+   no placeholder, because a generic glyph at the centre of somebody else's
+   swarm would be a claim about them that nobody made. */
+const MARK_PX=34;
+const MARKS={'omacom/omarchy':'omarchy-mark-256.png'};
+const MARK_IMG=new Map();
+function markFor(repo){
+  const src=MARKS[repo];
+  if(!src)return null;
+  let im=MARK_IMG.get(src);
+  if(!im){im=new Image();im.src=src;MARK_IMG.set(src,im)}
+  // decoded and non-broken, or nothing at all — never a half-drawn frame
+  return im.complete&&im.naturalWidth?im:null;
+}
+/* The rows the frame is divided into, extracted so the interface tests can ask
+   for them without running the animation loop. */
+function layout(W,H){
+  const cfd={x:0,y:H-132,w:W,h:132};
+  const lane={x:0,y:cfd.y-26,w:W,h:26};
+  const zone={x:0,y:0,w:W,h:lane.y};
+  zone.cx=W*0.5; zone.cy=zone.h*0.52;
+  return {cfd,lane,zone};
 }
 /* An artifact's place in the swarm is a pure function of four numbers seeded from
    its issue number, its age at the cursor, and the motion clock. Nothing about it
@@ -1124,6 +1258,10 @@ const MoteLayer=(()=>{
   layout(location=4) in vec3 aColour;
   uniform vec2 uViewport;              // device pixels
   uniform vec4 uZone;                  // cx, cy, w, h — CSS pixels
+  /* The orbit cap arrives ready-made rather than being recomputed here. It used
+     to be derived twice from uZone, once in swarmRmax and once in this shader,
+     which is a rule with two homes and therefore a rule that drifts. */
+  uniform float uRmax;
   uniform float uDpr, uTdays, uMotion;
   uniform int uScope;
   out vec2 vLocal; out vec3 vColour; out float vGlow; out float vFlags; out float vRad;
@@ -1133,8 +1271,7 @@ const MoteLayer=(()=>{
     if(!shown || !alive){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }  // off clip
     /* mirrors posOf + radiusOf, exactly */
     float age  = max(0.0, uTdays - aLife.x);
-    float rmax = min(uZone.z * 0.38, uZone.w * 0.42);
-    float r    = min(rmax, 26.0 + 24.0 * log2(1.0 + age) + aOrbit.w * 20.0);
+    float r    = min(uRmax, 26.0 + 24.0 * log2(1.0 + age) + aOrbit.w * 20.0);
     float w    = aOrbit.y * (0.25 / (1.0 + age * 0.4) + 0.025);
     float ang  = aOrbit.x + w * uMotion;
     float wob  = sin(uMotion * 0.4 + aOrbit.z) * 4.0;
@@ -1194,7 +1331,7 @@ const MoteLayer=(()=>{
   }`;
 
   let gl=null, prog=null, vao=null, inst=null, u={}, ok=false, tried=false;
-  let cv=null, count=0, key='', capacity=0;
+  let cv=null, count=0, key='', capacity=0, recolour=false;
 
   const rgb=(()=>{                       // any CSS colour → [0..1, 0..1, 0..1]
     const c=document.createElement('canvas'); c.width=c.height=1;
@@ -1230,7 +1367,7 @@ const MoteLayer=(()=>{
     if(!gl.getProgramParameter(prog,gl.LINK_STATUS))
       throw new Error(gl.getProgramInfoLog(prog)||'link failed');
     gl.useProgram(prog);
-    for(const n of ['uViewport','uZone','uDpr','uTdays','uMotion','uScope','uReopen'])
+    for(const n of ['uViewport','uZone','uRmax','uDpr','uTdays','uMotion','uScope','uReopen'])
       u[n]=gl.getUniformLocation(prog,n);
     vao=gl.createVertexArray(); gl.bindVertexArray(vao);
     const quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad);
@@ -1276,6 +1413,11 @@ const MoteLayer=(()=>{
 
   return {
     get ok(){return ok},
+    /* The palette moved. Every instance carries its colour in the buffer and
+       the reopened ring is a uniform, so both are marked stale rather than
+       written here — writing a uniform outside a frame means guessing which
+       program is bound, and there is exactly one place that knows. */
+    repaint(){ key=''; recolour=true; },
     /* Returns the canvas to composite, or null to fall back to the 2D loop. */
     render(d,zone,W,H,dpr,motion){
       if(!tried){ try{ init(); }catch(err){ ok=false; console.warn('[swarm] mote layer unavailable:',err.message); } }
@@ -1287,8 +1429,10 @@ const MoteLayer=(()=>{
       gl.viewport(0,0,w,h);
       gl.bindVertexArray(vao);
       gl.useProgram(prog);
+      if(recolour){ gl.uniform3fv(u.uReopen,rgb(COL.red)); recolour=false; }
       gl.uniform2f(u.uViewport,w,h);
       gl.uniform4f(u.uZone,zone.cx,zone.cy,zone.w,zone.h);
+      gl.uniform1f(u.uRmax,swarmRmax(zone));
       gl.uniform1f(u.uDpr,dpr);
       gl.uniform1f(u.uTdays,(T-d.t0)/DAY);
       gl.uniform1f(u.uMotion,motion);
@@ -1305,12 +1449,10 @@ function draw(ts){
   const {W,H,dpr}=sizeCanvas();
   const dt=lastTs?Math.min(120,ts-lastTs):16; lastTs=ts;
   anim+=(dt/1000)*SPEEDS[speedI];   // motion clock — the only thing the speed knob scales
-  const cfd={x:0,y:H-132,w:W,h:132};
-  const lane={x:0,y:cfd.y-26,w:W,h:26};
-  const zone={x:0,y:0,w:W,h:lane.y};zone.cx=W*0.5;zone.cy=zone.h*0.52;
+  const {cfd,lane,zone}=layout(W,H);
   cx.fillStyle=COL.bg;cx.fillRect(0,0,W,H);
   const g=cx.createRadialGradient(zone.cx,zone.cy,10,zone.cx,zone.cy,Math.max(W,zone.h)*0.55);
-  g.addColorStop(0,'rgba(122,162,247,0.07)');g.addColorStop(1,'rgba(122,162,247,0)');
+  g.addColorStop(0,PAL.glowIn);g.addColorStop(1,PAL.glowOut);
   cx.fillStyle=g;cx.fillRect(0,0,W,zone.h);
   cx.strokeStyle=COL.line;cx.beginPath();
   cx.moveTo(0,lane.y);cx.lineTo(W,lane.y);cx.moveTo(0,cfd.y);cx.lineTo(W,cfd.y);cx.stroke();
@@ -1335,7 +1477,7 @@ function draw(ts){
     spawnCrossings(d,zone);
 
     /* age rings */
-    cx.setLineDash([2,5]);cx.strokeStyle='rgba(65,72,104,0.55)';cx.lineWidth=1;
+    cx.setLineDash([2,5]);cx.strokeStyle=PAL.ageRing;cx.lineWidth=1;
     cx.fillStyle=COL.ghost;cx.font='8.5px JetBrains Mono,monospace';cx.textAlign='left';
     for(const [days,lab] of [[1,'1 day'],[7,'1 week'],[30,'1 month']]){
       const r=radiusOf(days,zone,0.5);
@@ -1344,14 +1486,26 @@ function draw(ts){
     }
     cx.setLineDash([]);
 
-    /* hive */
+    /* hive — the thing the swarm is in orbit around. Where the watched project
+       has a mark, the mark IS the hive and the rings open up to clear it; where
+       it has none the two rings are the hive exactly as they were. A logo that
+       loaded is drawn, one that has not is simply not drawn, and neither case
+       needs the frame to know which. */
     const pulse=2*Math.sin(anim*2);
-    cx.strokeStyle='rgba(122,162,247,0.55)';cx.lineWidth=1.5;
-    cx.beginPath();cx.arc(zone.cx,zone.cy,15+pulse,0,7);cx.stroke();
-    cx.strokeStyle='rgba(122,162,247,0.18)';
-    cx.beginPath();cx.arc(zone.cx,zone.cy,26+pulse*1.4,0,7);cx.stroke();
+    const mark=markFor(d.repo);
+    const rIn=mark?26:15, rOut=mark?38:26;
+    if(mark){
+      const s=MARK_PX;
+      cx.save();cx.globalAlpha=0.92;
+      cx.drawImage(mark,zone.cx-s/2,zone.cy-s/2,s,s);
+      cx.restore();
+    }
+    cx.strokeStyle=PAL.hive;cx.lineWidth=1.5;
+    cx.beginPath();cx.arc(zone.cx,zone.cy,rIn+pulse,0,7);cx.stroke();
+    cx.strokeStyle=PAL.hiveOut;
+    cx.beginPath();cx.arc(zone.cx,zone.cy,rOut+pulse*1.4,0,7);cx.stroke();
     cx.fillStyle=COL.ghost;cx.font='9.5px JetBrains Mono,monospace';cx.textAlign='center';
-    cx.fillText(d.repo,zone.cx,zone.cy+44);
+    cx.fillText(d.repo,zone.cx,zone.cy+rOut+18);
 
     /* alive swarm — one instanced draw call, composited here so the painter's
        order is what it always was: the hive is under it, the lane and the sparks
@@ -1412,11 +1566,11 @@ function draw(ts){
     }
     for(const [style,q] of lanePaths){
       if(style==='cp'||style==='cf'){
-        cx.strokeStyle=style==='cp'?'rgba(125,207,255,0.8)':'rgba(125,207,255,0.22)';cx.lineWidth=1;
+        cx.strokeStyle=style==='cp'?PAL.laneNow:PAL.laneWas;cx.lineWidth=1;
       } else {
         const past=style[0]==='p',kind=style.slice(2);
         cx.strokeStyle=past?(kind==='merged'?COL.green:kind==='reopened'?COL.red:kind==='closed'?COL.ghost:COL.dim)
-          :'rgba(65,72,104,0.3)';
+          :PAL.laneAhead;
         cx.lineWidth=kind==='reopened'?2:1.4;
       }
       cx.stroke(q);
@@ -1439,31 +1593,31 @@ function draw(ts){
     const zero=new Array(AGG.buckets).fill(0);
     const closedTop=AGG.closedC.map((v,k)=>v);
     const openTop=AGG.openedC.map((v,k)=>v);
-    band(zero,AGG.mergedC,'rgba(158,206,106,0.5)');
-    band(AGG.mergedC,closedTop,'rgba(86,95,137,0.45)');
-    band(closedTop,openTop,'rgba(224,175,104,0.38)');
-    cx.strokeStyle='rgba(224,175,104,0.9)';cx.lineWidth=1.2;cx.beginPath();
+    band(zero,AGG.mergedC,PAL.bandMerged);
+    band(AGG.mergedC,closedTop,PAL.bandClosed);
+    band(closedTop,openTop,PAL.bandOpen);
+    cx.strokeStyle=PAL.openLine;cx.lineWidth=1.2;cx.beginPath();
     for(let k=0;k<AGG.buckets;k++){const y=bY(openTop[k]);k?cx.lineTo(bx(k),y):cx.moveTo(bx(k),y)}
     cx.stroke();
     cx.fillStyle=COL.ghost;cx.font='9px JetBrains Mono,monospace';cx.textAlign='left';
     cx.fillText('CUMULATIVE FLOW — band gap = work in progress',mL+fog+2,cfd.y+14);
-    cx.fillStyle='rgba(158,206,106,0.95)';cx.fillText('merged',mL+fog+300,cfd.y+14);
-    cx.fillStyle='#8a93bd';cx.fillText('closed',mL+fog+352,cfd.y+14);
+    cx.fillStyle=PAL.mergedInk;cx.fillText('merged',mL+fog+300,cfd.y+14);
+    cx.fillStyle=PAL.closedInk;cx.fillText('closed',mL+fog+352,cfd.y+14);
     cx.fillStyle=COL.yellow;cx.fillText('still open',mL+fog+400,cfd.y+14);
 
     /* fog of the uninspected */
     if(fog){
       hatch(0,lane.y,mL+fog-4,H-lane.y);
       cx.save();cx.translate(mL+fog/2-2,lane.y+(H-lane.y)/2);cx.rotate(-Math.PI/2);
-      cx.fillStyle='#9aa5ce';cx.font='9px JetBrains Mono,monospace';cx.textAlign='center';
+      cx.fillStyle=PAL.quiet;cx.font='9px JetBrains Mono,monospace';cx.textAlign='center';
       cx.fillText('NOT INSPECTED',0,3);cx.restore();
     }
 
     /* time cursor */
     const xT=xOf(T);
-    cx.strokeStyle='rgba(255,255,255,0.85)';cx.lineWidth=1;
+    cx.strokeStyle=PAL.cursor;cx.lineWidth=1;
     cx.beginPath();cx.moveTo(xT,lane.y);cx.lineTo(xT,H-4);cx.stroke();
-    cx.fillStyle='rgba(255,255,255,0.75)';
+    cx.fillStyle=PAL.cursorInk;
     cx.beginPath();cx.moveTo(xT-4,lane.y);cx.lineTo(xT+4,lane.y);cx.lineTo(xT,lane.y+6);cx.closePath();cx.fill();
 
     /* pings */
@@ -2276,6 +2430,14 @@ function landHome(){
 }
 
 buildStatsBar();
+// Derive the painted colours from the tokens BEFORE the first frame: draw()
+// paints the ground glow whether or not any data has arrived, and an undefined
+// PAL entry is a transparent black rectangle rather than a visible error.
+syncPalette();
+// Then ask the machine what it is wearing. This is a round trip, so the first
+// frame or two are Tokyo Night and the palette lands after — which is right:
+// the built-in colours are the fallback, not a placeholder to be raced.
+loadTheme();
 // The directory is a local-server surface. Against a hosted copy of this page
 // there is nothing to point at, so the strip never renders and there is no
 // control to explain away — renderStrip already returns empty without LOCAL_API.
@@ -2294,6 +2456,10 @@ setInterval(()=>{
   loadManifest(false);
   // counts, badges, and projects another tab or the bar widget inducted
   if(LOCAL_API)refreshDir();
+  // and the desktop's theme, which a person can change under an open window.
+  // applyTheme compares before it touches anything, so an unchanged theme
+  // costs one small request and no repaint.
+  loadTheme();
 },45000);
 
 /* Both edges of the collapse rule are observed rather than polled: the host,

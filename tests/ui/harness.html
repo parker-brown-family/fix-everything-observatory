@@ -80,8 +80,107 @@ async function runOne(){
   report();
 }
 
+/* ---- where the swarm actually lands ------------------------------------
+ * Both centring faults this suite exists for were reported from a tiled pane
+ * on a 1.6x screen and neither was visible on a wide window at dpr 1 — which
+ * is every developer's screen, and was every earlier test's screen too. So the
+ * sizes below go down to a pane, and the runner runs the whole suite a second
+ * time under --force-device-scale-factor. The second run has since proved to
+ * be belt and braces rather than the only red: the stage fault reproduces at
+ * dpr 1 here too, once something asks the page how big its canvas actually is.
+ * It is kept because the reported symptom was HiDPI and a test that cannot see
+ * the reported configuration is not a test of the report.
+ *
+ * The page is asked for its own geometry rather than the test recomputing it:
+ * a test that re-derives the layout passes when both copies are wrong the same
+ * way, which is exactly the failure it is here to catch.
+ */
+function geom(f){
+  return f.contentWindow.eval(`(function(){
+    const {W,H}=sizeCanvas();
+    const {zone}=layout(W,H);
+    const rmax=swarmRmax(zone);
+    const half=rmax+WOBBLE;                       // the outermost orbit, wobbling
+    return {W,H,cx:zone.cx,cy:zone.cy,zh:zone.h,rmax,
+            left:zone.cx-half*ORBIT_X-RIM, right:zone.cx+half*ORBIT_X+RIM,
+            top:zone.cy-half*ORBIT_Y-RIM, bottom:zone.cy+half*ORBIT_Y+RIM,
+            back:[world.width,world.height], dpr:devicePixelRatio,
+            canvasH:world.getBoundingClientRect().height,
+            canvasBottom:world.getBoundingClientRect().bottom,
+            rowH:document.querySelector('main').getBoundingClientRect().height,
+            winH:innerHeight};
+  })()`);
+}
+
+async function runGeom(){
+  const DPR=(window.devicePixelRatio||1).toFixed(2);
+  // A wide window, a half window, a tiled pane, and a short one. 560x700 is
+  // the pane width the collapse suite already uses; at that width the swarm
+  // used to be drawn 1.1x the stage and ran off both sides of it.
+  for(const [w,h] of [[1600,900],[1100,800],[820,900],[560,700],[430,760]]){
+    const f=await frame(BASE,w,h);
+    const g=geom(f);
+    ok(`@${w}x${h} dpr${DPR}: the swarm is centred on the stage`,
+       Math.abs(g.cx-g.W/2)<0.51, `cx ${g.cx.toFixed(1)} of W ${g.W.toFixed(1)}`);
+    ok(`@${w}x${h} dpr${DPR}: no mote is drawn off the left or right edge`,
+       g.left>=-0.51 && g.right<=g.W+0.51,
+       `${g.left.toFixed(0)}..${g.right.toFixed(0)} in 0..${g.W.toFixed(0)}`);
+    ok(`@${w}x${h} dpr${DPR}: no mote is drawn above the swarm zone or into the lane`,
+       g.top>=-0.51 && g.bottom<=g.zh+0.51,
+       `${g.top.toFixed(0)}..${g.bottom.toFixed(0)} in 0..${g.zh.toFixed(0)}`);
+    ok(`@${w}x${h} dpr${DPR}: the backing store matches the laid-out canvas`,
+       Math.abs(g.back[0]-g.W*g.dpr)<=1 && Math.abs(g.back[1]-g.H*g.dpr)<=1,
+       `${g.back.join('x')} vs ${(g.W*g.dpr).toFixed(0)}x${(g.H*g.dpr).toFixed(0)}`);
+    f.remove();
+  }
+
+  /* The canvas must not outgrow the row it lives in. sizeCanvas() writes a
+   * backing store of laid-out size x devicePixelRatio, and that store is the
+   * canvas's INTRINSIC size — so a grid item holding one is floored by
+   * width x (store height / store width) unless it is told it may shrink. At
+   * dpr 1 that floor lands on the height the canvas already had and the fault
+   * is perfectly invisible; above 1 the stage settles taller than the window
+   * gave it, the bottom of the cumulative flow is drawn under the transport
+   * bar, and the swarm's centre — half of a height that includes the part
+   * nobody can see — sits low. Measured at dpr 1.6: a 614px row holding a
+   * 664px canvas.
+   *
+   * Sized repeatedly, because one call is not evidence that it settles. */
+  const f=await frame(BASE,1100,820);
+  for(let i=0;i<6;i++)f.contentWindow.eval('sizeCanvas()');
+  const g=geom(f);
+  ok(`dpr${DPR}: the canvas does not outgrow the row it lives in`,
+     g.canvasH<=g.rowH+1, `${g.canvasH.toFixed(0)}px canvas in a ${g.rowH.toFixed(0)}px row`);
+  ok(`dpr${DPR}: the whole instrument is inside the window`,
+     g.canvasBottom<=g.winH+1, `canvas ends at ${g.canvasBottom.toFixed(0)} of ${g.winH}`);
+  f.remove();
+
+  // Where the theme comes from, and what happens when it is not there. The
+  // stub answers 404 for /api/theme, which is the hosted case and the
+  // not-Omarchy case both: the page must keep its own palette rather than
+  // paint half a theme.
+  const t=await frame(BASE,1100,800);
+  const tw=t.contentWindow;
+  ok('no theme served: the built-in palette survives',
+     tw.eval('COL.bg')==='#1a1b26' && tw.eval('THEME_KEY')===null,
+     tw.eval('COL.bg'));
+  ok('no theme served: the painted colours are still derived, not blank',
+     /^rgba\(/.test(tw.eval('PAL.hive')), tw.eval('PAL.hive'));
+  tw.eval(`applyTheme({name:'probe',mode:'dark',colors:{background:'#101a10',blue:'#00ff88'}})`);
+  await new Promise(r=>setTimeout(r,60));
+  ok('a theme applies to the tokens the canvas paints from',
+     tw.eval('COL.bg')==='#101a10' && tw.eval('PAL.hive')==='rgba(0,255,136,0.55)',
+     tw.eval('COL.bg')+' '+tw.eval('PAL.hive'));
+  ok('a colour the theme did not name keeps its own value, not black',
+     tw.eval('COL.red')==='#f7768e', tw.eval('COL.red'));
+  t.remove();
+
+  report();
+}
+
 async function run(){
   if(SUITE==='one')return runOne();
+  if(SUITE==='geom')return runGeom();
   // ---- the collapse rule -------------------------------------------------
   // A width where four tabs comfortably fit, and one where they cannot.
   const wide=await frame(BASE,2400);

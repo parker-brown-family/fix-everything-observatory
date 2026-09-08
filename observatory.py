@@ -917,12 +917,79 @@ def mine_once(proj: "Project | None" = None) -> None:
         f"err={err}")
 
 
+# ---- the machine's own theme ---------------------------------------------------
+# Omarchy keeps the theme a machine is currently wearing at a fixed path, and
+# every theme — the twenty stock ones and any hand-rolled one — carries the same
+# colors.toml. This program is an Omarchy instrument sitting on an Omarchy
+# desktop, so it wears what the desktop wears rather than a palette of its own.
+#
+# It is READ ONLY and it is one known file. Nothing here takes a path from a
+# request, and no request can name a theme: there is exactly one current theme
+# and this reads it or reports that it could not.
+OMARCHY_THEME = (Path(os.environ.get("XDG_STATE_HOME")
+                      or Path.home() / ".local/state")
+                 / "omarchy/current/theme")
+
+# The keys the page actually paints with. A theme that omits one is not a theme
+# with a black one — the key is left OUT of the answer entirely and the page
+# keeps its own built-in value for it. A palette half-applied over a default is
+# how you get unreadable text nobody can explain.
+THEME_KEYS = (
+    "background", "dark_background", "darker_background", "lighter_background",
+    "foreground", "dark_foreground", "light_foreground", "bright_foreground",
+    "accent", "selection", "muted",
+    "red", "yellow", "orange", "green", "cyan", "blue", "magenta",
+    "bright_red", "bright_yellow", "bright_green", "bright_cyan",
+    "bright_blue", "bright_magenta",
+)
+HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+TOML_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\"']([^\"']*)[\"']")
+
+
+def read_theme():
+    """The current Omarchy theme's name, mode and colours, or a stated absence.
+
+    `name: None` means no theme was found — not "the default theme", and not a
+    palette of empty strings. The page tells those apart: it keeps its own
+    colours and says nothing, rather than painting something invented.
+    """
+    root = OMARCHY_THEME
+    out = {"name": None, "mode": None, "colors": {}}
+    try:
+        name = (root.parent / "theme.name").read_text(encoding="utf-8").strip()
+        out["name"] = name or None
+    except OSError:
+        pass
+    try:
+        text = (root / "colors.toml").read_text(encoding="utf-8")
+    except OSError:
+        return out
+    # A top-level key=value scan, stopping at the first [table]: the colours are
+    # all top level, and a table's keys would collide with them by short name.
+    colors, mode = {}, None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            break
+        m = TOML_LINE.match(line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if key == "mode":
+            mode = val if val in ("dark", "light") else None
+        elif key in THEME_KEYS and HEX.match(val):
+            colors[key] = val
+    out["mode"] = mode
+    out["colors"] = colors
+    return out
+
+
 # ---- server -------------------------------------------------------------------
 # Which API routes read and which write. Only used to answer HEAD with an
 # honest Allow header, but keeping the two lists named is what stops a route
 # being added to one half and silently inheriting the other half's manners.
 READ_ROUTES = frozenset({"/api/caps", "/api/projects", "/api/scan",
-                         "/api/preflight", "/api/complete"})
+                         "/api/preflight", "/api/complete", "/api/theme"})
 WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
                           "/api/active", "/api/roots", "/api/mine"})
 
@@ -1012,6 +1079,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
         # One static answer per process lifetime.
         if path == "/api/caps":
             self._json(200, {"projects": True, "induct": True})
+            return
+
+        # ---- what the desktop is wearing. Re-read per request rather than
+        # cached: a theme switch is a file change with no event to listen for,
+        # and the page asks for this on the same slow timer it refreshes
+        # everything else on.
+        if path == "/api/theme":
+            self._json(200, read_theme())
             return
 
         # ---- the observatory directory: what is watched, and what could be

@@ -57,9 +57,23 @@ done
 
 failed=0
 run_suite(){
-  local port="$1" suite="$2"
+  local port="$1" suite="$2" scale="${3:-}"
   local url="http://127.0.0.1:$port/tests/ui/harness.html?suite=$suite"
-  local profile out body verdict
+  local profile out body verdict label
+  local -a scaleflag=()
+  case "$suite" in
+    four|one) label="$suite watched project(s)" ;;
+    geom)     label="swarm geometry" ;;
+    *)        label="$suite" ;;
+  esac
+  # The centring faults this suite exists for were BOTH invisible at a device
+  # pixel ratio of 1 — one of them multiplied the stage by exactly the ratio,
+  # so at 1 it multiplied by 1 and shipped. A HiDPI pass is therefore not a
+  # nicety here; it is the only configuration in which the regression can fail.
+  if [[ -n $scale ]]; then
+    scaleflag=(--force-device-scale-factor="$scale")
+    label="$suite @ dpr $scale"
+  fi
   profile="$(mktemp -d)"
   # The page asks Google Fonts for JetBrains Mono. Every frame in the harness
   # would wait on that, ten times over, and a runner with no network waits for
@@ -68,7 +82,7 @@ run_suite(){
   # measurements then use, which is why the page re-measures on fonts.ready
   # rather than trusting its first answer.
   out="$("$chrome" --headless --disable-gpu --no-sandbox \
-          --user-data-dir="$profile" --window-size=1400,900 \
+          --user-data-dir="$profile" --window-size=1400,900 "${scaleflag[@]}" \
           --host-resolver-rules='MAP fonts.googleapis.com 127.0.0.1:9,MAP fonts.gstatic.com 127.0.0.1:9' \
           --virtual-time-budget=30000 --dump-dom "$url" 2>/dev/null)"
   rm -rf "$profile"
@@ -83,7 +97,7 @@ run_suite(){
           | sed 's/&amp;/\&/g;s/&lt;/</g;s/&gt;/>/g;s/&quot;/"/g' \
           | sed $'s/^ok  /  \033[32mok\033[0m   /; s/^FAIL/  \033[31mFAIL\033[0m/')"
   verdict="$(printf '%s' "$out" | grep -o 'RESULT [A-Z]* [0-9]*/[0-9]*' | head -1)"
-  printf '\n\033[1m  %s watched project(s)\033[0m\n' "$suite"
+  printf '\n\033[1m  %s\033[0m\n' "$label"
   [[ -n $body ]] && printf '%s\n' "$body"
   if [[ -z $verdict ]]; then
     printf '  \033[31m✗\033[0m the harness never reported — it did not finish\n'
@@ -96,4 +110,6 @@ run_suite(){
 
 run_suite "$PORT_FOUR" four
 run_suite "$PORT_ONE" one
+run_suite "$PORT_FOUR" geom
+run_suite "$PORT_FOUR" geom 1.6
 exit $failed
