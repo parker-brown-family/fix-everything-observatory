@@ -84,11 +84,20 @@ Needs `python3` (stdlib only) and a browser. Optional: `gh` — its token is
 borrowed to raise the mining horizon (read-only calls to GitHub's public API).
 
 What it touches: network to `api.github.com` only; the server binds
-`127.0.0.1`; the mined history is written to
-`~/.local/state/fix-everything-observatory/` and nothing is ever written into
-the plugin's own directory. No user configuration is modified. **It starts no
-processes** — there is no verb anywhere in the server that spawns one, which is
-a property the check battery asserts rather than a promise the README makes.
+`127.0.0.1`, rejects any request whose `Host` header is not loopback, and
+requires a custom header on every route with a side effect; the mined history
+is written to `~/.local/state/fix-everything-observatory/` and nothing is ever
+written into the plugin's own directory. No user configuration is modified.
+
+**On spawning, precisely.** `observatory.py` — the process that reads mined
+GitHub text — cannot start a process at all; it does not import `subprocess`,
+and `bin/verify` walks its import graph to keep it that way. The codebase does
+spawn in one place: `induction.py` runs `gh auth token`, `gh api user` and
+`gh --version`, always as fixed argument lists, never through a shell, to
+resolve which GitHub account a repository belongs to. **No mined ticket text
+reaches any argument of any of them.** That is the property worth having, and
+it is the one the check battery asserts — a plain "it starts no processes"
+would be easier to say and false.
 
 Remove it the same way it came:
 

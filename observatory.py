@@ -933,6 +933,11 @@ class QuietHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        # Enforced by the browser on no-cors loads — the shape a
+        # cross-origin <script src> or <img> uses. Without it the mined
+        # manifest is readable by any page the operator has open.
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("X-Content-Type-Options", "nosniff")
         super().end_headers()
 
     def _json(self, code: int, payload: dict, body: bool = True) -> None:
@@ -957,13 +962,53 @@ class QuietHandler(SimpleHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError):
             return {}
 
-    def do_GET(self):  # noqa: N802 — stdlib name
-        path = self.path.split("?")[0]
-        q = self._query()
+    # ---- the two gates every request passes ------------------------------
+    # Binding to 127.0.0.1 decides which INTERFACE accepts a connection. It
+    # does not decide which NAME may address it, and a browser routes by
+    # name: a page on evil.tld whose DNS answers 127.0.0.1 on its second
+    # lookup is same-origin with us by the browser's rules, and every
+    # custom-header check downstream is then satisfied by its own fetch.
+    # So the Host header is checked before anything is routed.
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("Host") or "").strip()
+        allowed = {f"127.0.0.1:{PORT}", f"localhost:{PORT}",
+                   f"[::1]:{PORT}", "127.0.0.1", "localhost"}
+        if host in allowed:
+            return True
+        self.send_error(403, "unexpected Host header")
+        return False
 
-        # What this server is willing to do. It reads, it mines, it registers
-        # a repository to watch. There is no verb here that starts a process,
-        # and this endpoint is where that stays visible to the page.
+    # A GET is not automatically safe. These three read the filesystem,
+    # spend the operator's GitHub rate budget, or start `gh` — side effects
+    # a bare <img> or a no-cors fetch from any open tab could otherwise
+    # trigger, because neither can set a custom header and neither has to.
+    # /api/caps and /api/projects stay open: the bar widget reads them and
+    # they do nothing but answer.
+    GUARDED_GETS = frozenset({"/api/preflight", "/api/scan", "/api/complete"})
+
+    def do_GET(self):  # noqa: N802 — stdlib name
+        if not self._host_ok():
+            return
+        path = self.path.split("?")[0]
+        # Belt to CORP's braces: a browser that loads this from another
+        # site labels the request cross-site, and nothing we serve is
+        # meant to be read by one. Absent header = a non-browser client
+        # (curl, the bar widget), which is allowed through.
+        if self.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site"):
+            self.send_error(403, "cross-site request")
+            return
+        q = self._query()
+        if path in self.GUARDED_GETS and \
+                self.headers.get("X-Fix-Observatory") != "1":
+            self.send_error(403, "missing X-Fix-Observatory header")
+            return
+
+        # What this server is willing to do. No verb in THIS module starts a
+        # process — the allocation endpoint that did was removed in 0.2.0 —
+        # but do not read that as "spawns nothing": /api/preflight reaches
+        # induction, which runs `gh` with fixed argv. What is true, and what
+        # bin/verify actually asserts, is narrower and worth stating plainly:
+        # no mined GitHub text reaches any argv, ever.
         # One static answer per process lifetime.
         if path == "/api/caps":
             self._json(200, {"projects": True, "induct": True})
@@ -1123,11 +1168,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
         return super().send_head()
 
     # ---- writes ---------------------------------------------------------------
-    # Every one of these carries the same custom-header requirement the
-    # allocation endpoint has had from the start: a custom header forces a CORS
-    # preflight, so a random page in another tab cannot fire them cross-origin,
-    # while our own same-origin app sends it without ceremony.
+    # Every one of these carries a custom-header requirement, and so do the
+    # three GETs with side effects: a custom header forces a CORS preflight,
+    # so a random page in another tab cannot fire them cross-origin, while
+    # our own same-origin app sends it without ceremony. The header is the
+    # second leg; _host_ok is the first, and neither is sufficient alone.
     def do_POST(self):  # noqa: N802 — stdlib name
+        if not self._host_ok():
+            return
         path = self.path.split("?")[0]
         if self.headers.get("X-Fix-Observatory") != "1":
             self.send_error(403, "missing X-Fix-Observatory header")

@@ -211,25 +211,26 @@ fi
 # still run `gh` (fixed argv, no ticket text anywhere near it), but nothing may
 # reach a shell or a detached child. And no shipped surface may carry the
 # endpoint, the button, or the environment flag that armed it.
-if grep -nE '(^|[^_[:alnum:]])(subprocess|Popen)' "$root/observatory.py" >/dev/null 2>&1; then
-  err "observatory.py can start a process again — the server that reads ticket text must not"
+if spawn_out="$(python3 "$root/tools/spawn-gate.py" 2>&1)"; then
+  ok "$(printf '%s' "$spawn_out" | head -1 | sed 's/^spawn-gate: //')"
+  printf '%s\n' "$spawn_out" | tail -n +2 | sed 's/^/    /'
 else
-  ok "observatory.py cannot start a process"
+  err "the spawn gate failed — a process primitive or a non-fixed argv is back"
+  printf '%s\n' "$spawn_out" | sed 's/^/    /'
 fi
 
-if grep -rnE 'shell=True|Popen|os\.system|os\.popen|os\.exec|start_new_session' \
-     "$root"/*.py >/dev/null 2>&1; then
-  err "a shell or detached child is back in the python — every spawn must be fixed argv"
+# Scoped to every TRACKED file, not a hand-listed four: `omarchy plugin add`
+# clones the repository, so a doc that advertises the removed button ships to
+# every user exactly like code does. bin/verify and the gate script name these
+# strings by necessity and are excluded by path, not by hoping they never match.
+alloc_hits="$(git -C "$root" ls-files -z \
+  | xargs -0 grep -lIiE '/api/allocate|allowAgentAllocation|ALLOCATE[ _-]AGENT|FIX_OBSERVATORY_(ALLOW_AGENTS|AGENT_CMD|AGENT_CWD)' 2>/dev/null \
+  | grep -vE '^(bin/verify|tools/spawn-gate\.py)$' || true)"
+if [[ -n "$alloc_hits" ]]; then
+  err "the agent-allocation surface is back in tracked files — it was removed under security review"
+  printf '%s\n' "$alloc_hits" | sed 's/^/    /'
 else
-  ok "no shell, no detached child, in either python file"
-fi
-
-if grep -rlE '/api/allocate|allowAgentAllocation|ALLOCATE AGENT|FIX_OBSERVATORY_ALLOW_AGENTS' \
-     "$root/app" "$root/observatory.py" "$root/manifest.json" "$root/BarWidget.qml" \
-     >/dev/null 2>&1; then
-  err "the agent-allocation surface is back in a shipped file — it was removed under security review"
-else
-  ok "no agent-allocation surface in any shipped file"
+  ok "no agent-allocation surface in any tracked file"
 fi
 
 printf '\n\033[1minterface\033[0m\n'

@@ -460,7 +460,8 @@ observatory.py:860  handler = functools.partial(QuietHandler, directory=str(ROOT
   <div class="stitle xhdr" onclick="toggleXSec(this)"><span class="xtrig">&#x25BC;</span> The PKGBUILD, drafted</div>
   <div class="xbody">
   <p>Modelled on <code>link-studio</code> and <code>herdr</code>. This is the artefact the pull request is mostly made of, and writing it now is what turns the rest of this document into a checklist.</p>
-  <pre># Maintainer: Parker Brown &lt;parker@brownfamilysports.com&gt;
+  <p><em>Superseded on 2026-09-08:</em> the three agent-related optdepends this block originally carried (claude-code and two terminals) are gone. The one-click agent allocation they served was removed entirely in 0.2.0 under a marketplace security review — the plugin no longer spawns an agent, so it no longer optionally depends on one. The rest of this document records the 2026-09-07 packaging plan as it stood.</em></p>
+<pre># Maintainer: Parker Brown &lt;parker@brownfamilysports.com&gt;
 
 pkgname=fix-everything-observatory
 pkgver=0.1.0
@@ -472,9 +473,6 @@ license=('MIT')
 depends=('python' 'bash' 'xdg-utils' 'hicolor-icon-theme')
 optdepends=(
   'github-cli: authenticated mining — 5,000 API requests an hour instead of 60'
-  'claude-code: the ALLOCATE AGENT button spawns a coding agent on a ticket'
-  'alacritty: terminal for the spawned agent'
-  'ghostty: terminal for the spawned agent'
 )
 options=('!debug')
 

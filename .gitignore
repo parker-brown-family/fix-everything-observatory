@@ -7,3 +7,10 @@ data/agent-prompt-*.md
 data/agent-report-*.md
 __pycache__/
 *.pyc
+
+# Session handoffs and harvests: development notes with no runtime role.
+# `omarchy plugin add` clones this repository onto the user's disk, so anything
+# tracked here ships to every user — four of these were, including a harvest
+# that reproduced the removed agent-allocation code in full. They stay on the
+# author's disk and out of the plugin.
+handoffs/

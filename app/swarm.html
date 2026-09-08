@@ -9,9 +9,12 @@
 <meta property="og:description" content="Every open ticket in orbit, coloured by what opened it, scrubbable across the repository's whole history.">
 <meta name="theme-color" content="#1a1b26">
 <link rel="icon" href="omarchy-logo.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500;700&display=swap">
+<!-- No web font. Three weights of JetBrains Mono used to come from Google's CDN,
+     which meant every page load sent the operator's IP and User-Agent to a third
+     party while the README promised "network to api.github.com only" — a small
+     lie that a listing reviewer can check in one devtools tab. The face is
+     common on the systems this ships to and the stack below degrades cleanly
+     where it is not, which is worth more than three exact weights. -->
 <style>
   /* Tokyo Night, matched to wecanfixeverything.com — this page is its instrument panel. */
   :root{
@@ -1615,7 +1618,13 @@ setTimeout(dismissHint,15000);
 const DIR={open:false,projects:[],roots:[],active:null,found:[],scan:null,
            report:null,busy:'',cur:-1,rows:[],comp:[],compI:-1,q:''};
 
-const api=(p)=>fetch(p).then(r=>r.json());
+// The header rides every request, GET included. A GET is not automatically
+// safe here: /api/scan walks the filesystem, /api/preflight starts `gh` and
+// spends the rate budget, /api/complete reads directories. The server requires
+// the header on exactly those three, because a bare <img> or a no-cors fetch
+// from any other tab can reach a GET and cannot set a custom header — which is
+// the whole reason the header works. /api/caps and /api/projects stay open.
+const api=(p)=>fetch(p,{headers:{'X-Fix-Observatory':'1'}}).then(r=>r.json());
 const post=(p,body)=>fetch(p,{method:'POST',
   headers:{'Content-Type':'application/json','X-Fix-Observatory':'1'},
   body:JSON.stringify(body||{})}).then(r=>r.json().then(j=>({status:r.status,j})));
