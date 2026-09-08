@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# The interface tests. Everything bin/verify cannot check by reading a file:
+# does the strip actually collapse where the rule says, does the directory
+# actually stop clipping in a pane, does the menu actually announce itself.
+#
+#   bin/test-ui
+#
+# Needs a Chromium. A bare CI runner may not have one, in which case this skips
+# with a reason rather than passing quietly — an interface test that silently
+# does nothing is worse than no interface test, because the green tick lies.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT_FOUR=${PORT_FOUR:-4531}
+PORT_ONE=${PORT_ONE:-4532}
+PORT_HARNESS=${PORT_HARNESS:-4533}
+
+chrome=""
+for c in chromium chromium-browser google-chrome-stable google-chrome; do
+  command -v "$c" >/dev/null 2>&1 && { chrome="$c"; break; }
+done
+if [[ -z $chrome ]]; then
+  printf '  \033[90m–\033[0m interface tests skipped: no chromium on PATH\n'
+  printf '    (install chromium, or run: bin/test-ui on a machine that has one)\n'
+  exit 0
+fi
+
+pids=()
+cleanup(){ for p in "${pids[@]:-}"; do [[ -n ${p:-} ]] && kill "$p" 2>/dev/null; done; }
+trap cleanup EXIT
+
+# A port still held by a previous run answers with the PREVIOUS fixture, and
+# the suite then passes or fails against data nobody chose. Refuse instead.
+for port in "$PORT_FOUR" "$PORT_ONE"; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+    exec 3<&-
+    printf '  \033[31m✗\033[0m port %s is already in use — a previous run is still up\n' "$port"
+    printf '    pkill -f tests/ui/stub.py\n'
+    exit 1
+  fi
+done
+
+# Each fixture is its own origin, and the harness is served BY that origin so
+# its frames are same-origin and readable. Two fixtures, therefore two runs.
+python3 "$root/tests/ui/stub.py" --port "$PORT_FOUR" --projects 4 >/dev/null 2>&1 &
+pids+=($!)
+python3 "$root/tests/ui/stub.py" --port "$PORT_ONE"  --projects 1 >/dev/null 2>&1 &
+pids+=($!)
+
+# Wait for both rather than sleeping a guessed number of seconds.
+for port in "$PORT_FOUR" "$PORT_ONE"; do
+  for _ in $(seq 1 60); do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then exec 3<&-; break; fi
+    sleep 0.1
+  done
+done
+
+failed=0
+run_suite(){
+  local port="$1" suite="$2"
+  local url="http://127.0.0.1:$port/tests/ui/harness.html?suite=$suite"
+  local profile out body verdict
+  profile="$(mktemp -d)"
+  # The page asks Google Fonts for JetBrains Mono. Every frame in the harness
+  # would wait on that, ten times over, and a runner with no network waits for
+  # the timeout instead of the font — so the two font hosts are pointed at a
+  # closed port and fail immediately. The fallback monospace is what the
+  # measurements then use, which is why the page re-measures on fonts.ready
+  # rather than trusting its first answer.
+  out="$("$chrome" --headless --disable-gpu --no-sandbox \
+          --user-data-dir="$profile" --window-size=1400,900 \
+          --host-resolver-rules='MAP fonts.googleapis.com 127.0.0.1:9,MAP fonts.gstatic.com 127.0.0.1:9' \
+          --virtual-time-budget=30000 --dump-dom "$url" 2>/dev/null)"
+  rm -rf "$profile"
+  # The harness reports through the DOM, so the runner never looks at pixels.
+  # One line per assertion, prefixed, because a count with no names turns every
+  # red run into a second investigation.
+  # 'TEST ok'/'TEST FAIL', not a bare 'TEST ' — the harness's own source is in
+  # the dumped DOM, and the template literal that writes these lines contains
+  # the word too.
+  body="$(printf '%s\n' "$out" | grep -E 'TEST (ok|FAIL)' \
+          | sed 's/.*<pre id="plain">//; s|</pre>.*||; s/.*TEST //' \
+          | sed 's/&amp;/\&/g;s/&lt;/</g;s/&gt;/>/g;s/&quot;/"/g' \
+          | sed $'s/^ok  /  \033[32mok\033[0m   /; s/^FAIL/  \033[31mFAIL\033[0m/')"
+  verdict="$(printf '%s' "$out" | grep -o 'RESULT [A-Z]* [0-9]*/[0-9]*' | head -1)"
+  printf '\n\033[1m  %s watched project(s)\033[0m\n' "$suite"
+  [[ -n $body ]] && printf '%s\n' "$body"
+  if [[ -z $verdict ]]; then
+    printf '  \033[31m✗\033[0m the harness never reported — it did not finish\n'
+    failed=1
+    return
+  fi
+  printf '  %s\n' "$verdict"
+  [[ $verdict == RESULT\ PASS* ]] || failed=1
+}
+
+run_suite "$PORT_FOUR" four
+run_suite "$PORT_ONE" one
+exit $failed

@@ -233,7 +233,13 @@
      modal semantics to get wrong — and at the widths this instrument is
      actually read in, two tabs already clear the threshold, so this is the
      everyday state rather than the exception. */
-  .wm{position:relative;display:flex;align-items:center;gap:9px}
+  /* A field, not a bar. Stretched across a wide window the control reads as a
+     second header — the eye has to cross the whole screen to get from the
+     project name to the caret that opens it, and the empty middle is doing
+     nothing but separating two halves of one control. Bounded, it is a single
+     place to look, and the room it gives back is the whitespace the header
+     above it already earns. */
+  .wm{position:relative;display:flex;align-items:center;gap:9px;width:min(520px,100%)}
   .wmtrigger{
     flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:10px;text-align:left;
     background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);

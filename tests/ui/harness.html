@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>swarm ui — running</title>
+<style>
+  body{background:#111;color:#c0caf5;font:13px/1.6 ui-monospace,monospace;margin:0;padding:18px}
+  h1{font-size:14px;letter-spacing:.14em;margin:0 0 12px}
+  pre{white-space:pre-wrap;margin:0}
+  .p{color:#9ece6a} .f{color:#f7768e}
+  #rig{position:fixed;left:0;bottom:0;width:1px;height:1px;overflow:hidden;opacity:.01}
+</style>
+</head>
+<body>
+<h1>SWARM UI TESTS</h1>
+<pre id="out">running…</pre>
+<div id="rig"></div>
+<script>
+/* The interface tests, run against a frozen registry served by tests/ui/stub.py.
+ *
+ * Frames are created AT the width being tested rather than resized into it, so
+ * every assertion rides the page's own initial render — no ResizeObserver, no
+ * animation frame, nothing that a browser throttles when a tab is not visible.
+ * The two cases that genuinely need a size CHANGE call the page's remeasure()
+ * directly and say so, because what they are testing is the rule, not the
+ * browser's delivery of a resize.
+ */
+/* The harness is served BY the stub, so its frames are same-origin and their
+ * documents are readable. Two fixtures therefore mean two origins and two runs
+ * — ?suite=four and ?suite=one — rather than one page reaching across ports,
+ * which the browser refuses and which cost a first version of this file. */
+const params=new URLSearchParams(location.search);
+const SUITE=params.get('suite')||'four';
+const BASE=location.origin;
+const results=[];
+const ok=(name,cond,detail)=>results.push({name,pass:!!cond,detail:detail===undefined?'':String(detail)});
+
+function frame(base,width,height){
+  return new Promise(res=>{
+    const f=document.createElement('iframe');
+    f.style.cssText=`width:${width}px;height:${height||700}px;border:0`;
+    f.src=base+'/app/swarm.html';
+    document.getElementById('rig').appendChild(f);
+    let done=false;
+    const settle=()=>{
+      if(done)return; done=true;
+      // Stop the swarm's animation loop in test frames. draw() re-arms itself
+      // through requestAnimationFrame, and under the headless runner's virtual
+      // clock that becomes thousands of frames per virtual second across a
+      // dozen iframes — the first version of this harness ran for minutes and
+      // reported nothing. Reassigning the binding lets the one already-queued
+      // callback run and re-arm the no-op, so the loop stops after one frame.
+      try{ f.contentWindow.eval('draw=function(){}') }catch(e){}
+      setTimeout(()=>res(f),700);
+    };
+    f.onload=settle;
+    setTimeout(settle,6000);
+  });
+}
+const q=(f,s)=>f.contentDocument.querySelector(s);
+const all=(f,s)=>[...f.contentDocument.querySelectorAll(s)];
+const mode=f=>q(f,'#wmtrigger')?'menu':'strip';
+function ratio(f){
+  const el=q(f,'#projstrip'), g=el&&el.querySelector('.pghost');
+  if(!el||!g)return null;
+  const cs=f.contentWindow.getComputedStyle(el);
+  const need=g.offsetWidth+parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight);
+  return {need, host:el.clientWidth, r:need/el.clientWidth};
+}
+
+async function runOne(){
+  // One watched project has no switching to do, but ＋ WATCH ANOTHER is the
+  // only mouse path to the directory since the header line was deleted.
+  const solo=await frame(BASE,2400);
+  ok('one project: the strip still renders', q(solo,'#projstrip').className.includes('on'),
+     q(solo,'#projstrip').className);
+  ok('one project: watch-another is reachable with a mouse',
+     !!q(solo,'.pstriprow:not(.pghost) .pmore'));
+  ok('one project: it stays a strip, not a menu', mode(solo)==='strip', mode(solo));
+  report();
+}
+
+async function run(){
+  if(SUITE==='one')return runOne();
+  // ---- the collapse rule -------------------------------------------------
+  // A width where four tabs comfortably fit, and one where they cannot.
+  const wide=await frame(BASE,2400);
+  const rw=ratio(wide);
+  ok('wide: the strip stays a strip', mode(wide)==='strip', mode(wide));
+  ok('wide: ratio is under the 0.80 line', rw && rw.r<0.80, rw&&rw.r.toFixed(3));
+  ok('wide: every project has a tab', all(wide,'.pstriprow:not(.pghost) .ptab').length===4,
+     all(wide,'.pstriprow:not(.pghost) .ptab').length);
+  ok('wide: the ghost is inert and unclickable',
+     q(wide,'.pghost').hasAttribute('inert') &&
+     all(wide,'.pghost .ptab').every(b=>b.onclick===null));
+
+  const pane=await frame(BASE,560);
+  const rp=ratio(pane);
+  ok('pane: collapses to one control', mode(pane)==='menu', mode(pane));
+  ok('pane: ratio is over the line', rp && rp.r>=0.80, rp&&rp.r.toFixed(3));
+  ok('pane: no tabs are left behind', all(pane,'.pstriprow:not(.pghost) .ptab').length===0);
+  ok('pane: the ghost still measures the full strip', ratio(pane).need>1000, ratio(pane).need);
+
+  // The control is a field, not a bar: bounded, and never the whole row.
+  const wideMenu=await frame(BASE,1500);          // 1450/1500 = 0.967 → collapsed
+  ok('bounded: collapsed at 1500', mode(wideMenu)==='menu', mode(wideMenu));
+  const bar=q(wideMenu,'.wm').getBoundingClientRect().width;
+  const host=q(wideMenu,'#projstrip').clientWidth;
+  ok('bounded: the control is a field, not the full row', bar<=530 && bar<host*0.55,
+     Math.round(bar)+'px of '+host);
+
+  // ---- hysteresis. Needs a size CHANGE, so it drives remeasure() directly.
+  const band=await frame(BASE,2400);
+  const el=q(band,'#projstrip');
+  const step=w=>{el.style.width=w+'px'; band.contentWindow.eval('remeasure()'); return mode(band)};
+  ok('band: 0.97 collapses', step(1500)==='menu');
+  ok('band: 0.775 stays collapsed (a bare 80% rule would flap here)', step(1870)==='menu');
+  ok('band: 0.744 restores', step(1950)==='strip');
+  ok('band: narrow collapses again', step(700)==='menu');
+  el.style.width='';
+
+  // ---- the menu itself ---------------------------------------------------
+  const m=await frame(BASE,560);
+  q(m,'#wmtrigger').click();
+  await new Promise(r=>setTimeout(r,220));
+  ok('menu: opens with focus in the filter', m.contentDocument.activeElement.id==='wmq',
+     m.contentDocument.activeElement.id);
+  ok('menu: reports expanded', q(m,'#wmtrigger').getAttribute('aria-expanded')==='true');
+  ok('menu: announces the count', /4 watched/.test(q(m,'#wmlive').textContent),
+     q(m,'#wmlive').textContent);
+  ok('menu: the shown project is marked, not merely coloured',
+     !!q(m,'.wmopt.here .dbadge.watched'));
+
+  const type=(f,v)=>{const i=q(f,'#wmq'); i.value=v;
+    i.dispatchEvent(new f.contentWindow.Event('input',{bubbles:true}))};
+  type(m,'tdel');
+  await new Promise(r=>setTimeout(r,150));
+  const hits=all(m,'.wmopt').map(o=>o.dataset.slug);
+  ok('fuzzy: a subsequence matches (tdel → terminal-delight)',
+     hits.length===2 && hits.every(s=>/terminal-delight/.test(s)), hits.join(','));
+
+  type(m,'zzzz');
+  await new Promise(r=>setTimeout(r,150));
+  ok('empty: no rows, and the induct row is selected',
+     all(m,'.wmopt').length===0 && q(m,'.wmmore').classList.contains('cur'));
+  ok('empty: the query rides into induction', /zzzz/.test(q(m,'.wmmore').textContent),
+     q(m,'.wmmore').textContent.trim());
+  ok('empty: activedescendant points at the induct row',
+     q(m,'#wmq').getAttribute('aria-activedescendant')==='wmopt-more');
+  ok('empty: it is announced, not silent', /no watched project/.test(q(m,'#wmlive').textContent));
+
+  const esc=k=>q(m,'#wmq').dispatchEvent(new m.contentWindow.KeyboardEvent('keydown',{key:k,bubbles:true}));
+  esc('Escape');
+  await new Promise(r=>setTimeout(r,120));
+  ok('escape: clears the filter first', q(m,'#wmq').value==='');
+  esc('Escape');
+  await new Promise(r=>setTimeout(r,120));
+  ok('escape: then closes and returns focus to the trigger',
+     q(m,'#wmpanel').hidden && m.contentDocument.activeElement.id==='wmtrigger',
+     m.contentDocument.activeElement.id);
+
+  // ---- the header stays deleted ------------------------------------------
+  ok('header: the wordmark is the only text', /^FIX EVERYTHING OBSERVATORY$/.test(q(wide,'h1').textContent.trim()),
+     q(wide,'h1').textContent.trim());
+  ok('header: no strapline, tagline or watching-line survived',
+     !q(wide,'.diff') && !q(wide,'#dirBtn') && !q(wide,'#repoName') && !q(wide,'h1 small'));
+  ok('header: nothing in the script still reaches for them',
+     !wide.contentWindow.__bootError, wide.contentWindow.__bootError||'');
+
+  // ---- the directory stops clipping in a pane ----------------------------
+  for(const w of [420,560,900,1300]){
+    const f=await frame(BASE,w,860);
+    f.contentDocument.dispatchEvent(new f.contentWindow.KeyboardEvent('keydown',{key:'p',bubbles:true}));
+    await new Promise(r=>setTimeout(r,320));
+    const card=q(f,'.dcard');
+    ok(`directory @${w}: it opens`, q(f,'#dir').classList.contains('on'));
+    if(!card)continue;
+    const cw=Math.round(card.getBoundingClientRect().width);
+    const cols=all(f,'.dcol').map(c=>Math.round(c.getBoundingClientRect().width));
+    ok(`directory @${w}: no column is wider than its card`, cols.every(c=>c<=cw+1),
+       cols.join('/')+' in '+cw);
+    ok(`directory @${w}: no column clips its own content`,
+       all(f,'.dcol').every(c=>c.scrollWidth<=c.clientWidth+1),
+       all(f,'.dcol').map(c=>c.scrollWidth+'>'+c.clientWidth).join(' '));
+  }
+
+  report();
+}
+
+function report(){
+  const pass=results.filter(r=>r.pass).length, fail=results.length-pass;
+  const lines=results.map(r=>`${r.pass?'  ok  ':'  FAIL'} ${r.name}${r.detail?'  — '+r.detail:''}`);
+  lines.push('', `${pass} passed, ${fail} failed`);
+  document.getElementById('out').innerHTML=lines.map(l=>
+    l.startsWith('  FAIL')?`<span class="f">${l}</span>`:
+    l.startsWith('  ok')?`<span class="p">${l}</span>`:l).join('\n');
+  // A plain, prefixed copy for the runner. The coloured block above is for a
+  // person with the page open; a shell reading --dump-dom cannot pull text out
+  // of a multi-line element with sed, and a runner that reports only a count
+  // makes every failure a second investigation.
+  const plain=document.createElement('pre');
+  plain.id='plain';
+  // Padded with newlines at both ends: --dump-dom writes the opening and
+  // closing tags on the same lines as the first and last entries, which
+  // swallowed one assertion and glued markup to another.
+  plain.textContent='\n'+results.map(r=>
+    `TEST ${r.pass?'ok  ':'FAIL'} ${r.name}${r.detail?'  — '+r.detail:''}`).join('\n')+'\n';
+  document.body.appendChild(plain);
+  // The runner reads these two, not the pixels.
+  document.title=fail?`FAIL ${fail}`:`PASS ${pass}`;
+  const tag=document.createElement('div');
+  tag.id='verdict';
+  tag.textContent=fail?`RESULT FAIL ${fail}/${results.length}`:`RESULT PASS ${pass}/${results.length}`;
+  document.body.appendChild(tag);
+}
+
+run().catch(e=>{
+  ok('harness ran to completion',false,String(e&&e.stack||e));
+  report();
+});
+</script>
+</body>
+</html>

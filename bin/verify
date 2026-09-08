@@ -232,6 +232,39 @@ else
   ok "no agent-allocation surface in any shipped file"
 fi
 
+printf '\n\033[1minterface\033[0m\n'
+
+# The cheap half of the interface tests, and the one that catches the expensive
+# bug: markup and script live in one file, so deleting a line of HTML can leave
+# a live $('#id') behind — which is a TypeError at parse time and a blank
+# instrument, not a cosmetic gap.
+if refout="$(python3 "$root/tests/check_refs.py" 2>&1)"; then
+  printf '%s\n' "$refout"
+else
+  printf '%s\n' "$refout"
+  err "the swarm page reaches for an element that is defined nowhere in it"
+fi
+
+# The other half needs a browser, and a bare runner may not have one. Skipped
+# with a reason rather than passing quietly: an interface test that silently
+# does nothing is worse than none, because the green tick lies.
+if [[ ${SKIP_UI_TESTS:-} == 1 ]]; then
+  skip "interface tests skipped: SKIP_UI_TESTS=1"
+elif ! command -v chromium >/dev/null 2>&1 \
+  && ! command -v chromium-browser >/dev/null 2>&1 \
+  && ! command -v google-chrome-stable >/dev/null 2>&1 \
+  && ! command -v google-chrome >/dev/null 2>&1; then
+  skip "interface tests skipped: no chromium on PATH (bin/test-ui runs them)"
+elif uiout="$(bash "$root/bin/test-ui" 2>&1)"; then
+  # Counted off the harness's own verdict lines, not off the printed rows: those
+  # carry colour escapes, and grepping them returned 1 for a suite of 43.
+  n_ui="$(printf '%s' "$uiout" | grep -oE 'RESULT PASS [0-9]+' | awk '{s+=$3} END{print s+0}')"
+  ok "interface tests pass ($n_ui assertions)"
+else
+  printf '%s\n' "$uiout"
+  err "interface tests failed — bin/test-ui"
+fi
+
 # House rule, machine-absolute: no AI is ever credited in this history.
 if git -C "$root" log --format=%B 2>/dev/null \
    | grep -qiE 'co-authored-by:.*(claude|copilot|codex|gemini|aider)|generated with \[?claude'; then
