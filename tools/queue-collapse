@@ -117,7 +117,7 @@ def gql(query, variables, tries=3):
     return None
 
 
-def harvest(query, q, pages, label):
+def harvest(query, q, pages, label=None):
     rows, cursor, total = [], None, None
     for i in range(pages):
         variables = {"q": q}
@@ -129,12 +129,51 @@ def harvest(query, q, pages, label):
         s = d["data"]["search"]
         total = s["issueCount"]
         rows += [n for n in s["nodes"] if n]
-        print(f"\r  {label}: {len(rows)}/{min(total, pages * 50)}", end="", file=sys.stderr, flush=True)
+        if label:
+            print(f"\r  {label}: {len(rows)}/{total}", end="", file=sys.stderr, flush=True)
         if not s["pageInfo"]["hasNextPage"]:
             break
         cursor = s["pageInfo"]["endCursor"]
-    print(file=sys.stderr)
+    if label:
+        print(file=sys.stderr)
     return rows, total
+
+
+def harvest_windowed(query, base_q, per_page, label, total_hint=None):
+    """Page the whole queue, not the first thousand of it.
+
+    GitHub's search refuses to return more than 1000 results for one query, and a
+    flooded repository has more than that open. Splitting by creation date keeps
+    every query under the ceiling: windows walk backwards from today, halving
+    whenever one comes back full, so nothing is silently dropped.
+    """
+    seen, out = set(), []
+    end = datetime.date.today() + datetime.timedelta(days=1)
+    span, floor = 30, datetime.date(2020, 1, 1)
+    total = total_hint
+    stalls = 0
+    while end > floor and stalls < 3 and (total is None or len(out) < total):
+        start = end - datetime.timedelta(days=span)
+        q = f"{base_q} created:{start.isoformat()}..{end.isoformat()}"
+        rows, window_total = harvest(query, q, max(1, 1000 // per_page), None)
+        if window_total and window_total > 950 and span > 1:
+            span = max(1, span // 2)          # too dense: narrow and retry the window
+            continue
+        fresh = 0
+        for r in rows:
+            if r["number"] not in seen:
+                seen.add(r["number"])
+                out.append(r)
+                fresh += 1
+        stalls = stalls + 1 if fresh == 0 else 0
+        print(f"\r  {label}: {len(out)}"
+              + (f"/{total_hint}" if total_hint else "")
+              + f"  (back to {start.isoformat()})", end="", file=sys.stderr, flush=True)
+        end = start
+        if window_total is not None and window_total < 200 and span < 120:
+            span = min(120, span * 2)         # sparse older history: widen
+    print(file=sys.stderr)
+    return out
 
 
 def fetch(repo, limit, since_days=45):
@@ -146,10 +185,20 @@ def fetch(repo, limit, since_days=45):
     which open items match each other — it is which open items match something they
     already shipped.
     """
-    issues, n_issues = harvest(ISSUE_Q, f"repo:{repo} is:issue is:open sort:created-desc",
-                               limit // 50, "issues")
-    prs, n_prs = harvest(PR_Q, f"repo:{repo} is:pr is:open sort:created-desc",
-                         limit // 25, "pull requests")
+    _, n_issues = harvest(ISSUE_Q, f"repo:{repo} is:issue is:open", 1, None)
+    _, n_prs = harvest(PR_Q, f"repo:{repo} is:pr is:open", 1, None)
+
+    if limit and (n_issues or 0) > limit:
+        issues = harvest_windowed(ISSUE_Q, f"repo:{repo} is:issue is:open", 50,
+                                  "issues", n_issues)
+    else:
+        issues, _ = harvest(ISSUE_Q, f"repo:{repo} is:issue is:open sort:created-desc",
+                            max(1, (limit or 1000) // 50), "issues")
+    if limit and (n_prs or 0) > limit:
+        prs = harvest_windowed(PR_Q, f"repo:{repo} is:pr is:open", 25, "pull requests", n_prs)
+    else:
+        prs, _ = harvest(PR_Q, f"repo:{repo} is:pr is:open sort:created-desc",
+                         max(1, (limit or 1000) // 25), "pull requests")
 
     cutoff = (datetime.date.today() - datetime.timedelta(days=since_days)).isoformat()
     merged, _ = harvest(SETTLED_PR_Q, f"repo:{repo} is:pr is:merged merged:>={cutoff}",
@@ -622,8 +671,9 @@ def plan(repo, items, groups, find, sims, edges, coverage):
 def render_text(p, width=100):
     s, cov = p["summary"], p["coverage"]
     L = []
-    L.append(f"{p['repo']} — {s['sampled']} open items examined, "
-             f"{cov['unexamined']} not reached")
+    L.append(f"{p['repo']} — {s['sampled']} open items examined"
+             + (", the whole open queue" if not cov["unexamined"]
+                else f", {cov['unexamined']} not reached"))
     L.append("")
     L.append(f"  {s['distinct_pieces_of_work']} distinct pieces of work")
     after = sum(len(a["filed_after_the_fix"]) for a in p["already_fixed"])
@@ -863,8 +913,9 @@ font:11.5px/1.7 var(--mono)}}
 {fixed_rows}
 <h2>The same work, filed more than once</h2>
 {''.join(rows)}
-<footer><p>{s['sampled']} open items examined · {s['unexamined_items']} not reached (GitHub's search
-API stops at 1000 per query; those items are unexamined, not unique)</p>
+<footer><p>{s['sampled']} open items examined ·
+{"the whole open queue: nothing was out of reach" if not s['unexamined_items'] else
+ f"{s['unexamined_items']} not reached, and counted as unexamined rather than as distinct work"}</p>
 <p>{"No automated checks are configured in this repository, so nothing here is verified by CI: "
    "&#8220;applies cleanly&#8221; is not &#8220;works&#8221;." if not s['checks_configured'] else
    "Check state is read from the head commit of each pull request."}

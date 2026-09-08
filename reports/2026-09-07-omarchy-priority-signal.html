@@ -692,9 +692,14 @@ table.wide td:first-child { white-space: nowrap; }
   <footer>
     <p>fix-everything-observatory · brief written 2026-09-07, decisions and collapse map added
       2026-09-08 · all figures read live from the GitHub API</p>
-    <p>Artifacts: <code>reports/2026-09-07-collapse-map.json</code> (371 clusters, every member and
-      edge kind) · <code>reports/2026-09-07-collapse-plan.md</code> (the twenty biggest, with an
-      unposted draft comment each)</p>
+    <p>Artifacts: <code>tools/queue-collapse</code> (the tool, read-only, with its fixture test and
+      README) · <code>reports/2026-09-08-omarchy-worklist.html</code> (what it prints for omarchy) ·
+      <code>reports/2026-09-07-collapse-map.json</code> (the first map, 371 clusters) ·
+      <code>reports/2026-09-08-note-for-the-maintainer.md</code> (an unsent draft)</p>
+    <p>The map became a worklist: which patch to keep, what closes when it merges, and which open
+      items match work already closed. That last one found the Codex limits collector — fixed for
+      codex-cli 0.149 on 25 August, broken again by 0.150, and carrying ten open reports with no
+      merged patch that mentions the flag at fault.</p>
     <p>Add a note to any block; copy map puts them on the clipboard as anchors, save into file
       bakes them into this HTML.</p>
   </footer>

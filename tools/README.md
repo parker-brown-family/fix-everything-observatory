@@ -15,21 +15,23 @@ A queue that arrives faster than it drains stops being a prioritisation problem 
 becomes a discovery problem. The expensive thing is no longer deciding what to do
 about a report — it is finding out that five people already sent the same patch.
 
-On `omacom/omarchy`, reading the newest 1,000 open issues and 1,000 open pull
-requests on 2026-09-08:
+On `omacom/omarchy`, reading the entire open queue on 2026-09-08:
 
 | | |
 |---|---|
-| 2,000 open items examined | 1,476 more than the API would return |
-| **1,288** distinct pieces of work | the rest are the same work, filed again |
-| **413** duplicate items in 215 groups | one group holds five patches inverting the same boolean |
-| **208** apply cleanly and close an issue | and duplicate nothing else in the queue |
-| **93** no longer apply to the base | they cannot merge as they stand |
-| **69** arrived after a fix for the same surface closed | one of them nine times over, the last on the day of the run |
+| **3,477** open items examined | none missed: 0 not reached |
+| **2,212** distinct pieces of work | the rest are the same work, filed again |
+| **756** duplicate items in 316 groups | the largest is 16 items from 15 people, all for one inverted boolean |
+| **298** apply cleanly and close an issue | and duplicate nothing else in the queue |
+| **317** no longer apply to the base | they cannot merge as they stand |
+| **123** arrived after a fix for the same surface closed | plus 61 filed before one, which are the fair ones to close |
+| **3** carry an approving review | out of 1,977 open pull requests |
 
-That last row is the one worth the run. A bug closed on 22 August has been reported
-by nine more people since, the most recent the same morning — the fix never reached
-them, and the queue was too loud to say so.
+The last two rows are what the run is for. The Codex usage collector was fixed for
+codex-cli 0.149 and merged on 25 August; the CLI moved to 0.150, the collector still
+hardcodes an `--ask-for-approval` value it rejects, and ten open items now say so —
+the most recent filed the day before this run. No merged pull request has ever
+mentioned that flag. The queue was too loud to say it.
 
 ## What it prints
 
@@ -79,10 +81,12 @@ device. Right to look at together, wrong to close as duplicates.
 That is why nothing is closed for you, why the only generated commands are for items
 filed before the fix they match, and why every group prints what formed it.
 
-**It sees what the API returns.** GitHub's search stops at 1,000 results per query,
-so on a large queue the older tail is unexamined. Unexamined is not unique, and the
-report says how many items it never reached rather than quietly counting them as
-distinct.
+**It reads the whole queue, and says so when it cannot.** GitHub's search stops at
+1,000 results per query, which is fewer than omarchy has open. Where the queue is
+larger, the fetch splits by creation date and halves any window that comes back full,
+so no query hits the ceiling — 3,477 of 3,477 items on this run. When something is
+genuinely out of reach the report counts it as unexamined rather than quietly
+counting it as distinct, because unexamined is not unique.
 
 **It does not judge people.** There is no contributor score. The only author
 statistic is how many distinct people reported a surface, which is a fact about the
