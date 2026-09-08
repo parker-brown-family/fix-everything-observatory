@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "brownfamilysports.observatory",
   "name": "Fix-Everything Observatory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Parker Brown",
   "license": "MIT",
   "description": "A scrubbable observatory for the Omarchy repair swarm — every issue and PR since day one, provenance-lit, replayed like a media player",
@@ -14,18 +14,6 @@
     "displayName": "Fix-Everything Observatory",
     "description": "The swarm chip: one glyph in the bar, and a click that opens the observatory — every omarchy ticket as a mote orbiting the repo hive, provenance-lit, with a media-player replay of the whole history and a cumulative flow diagram of the healing.",
     "category": "Developer Tools",
-    "allowMultiple": false,
-    "defaults": {
-      "allowAgentAllocation": false
-    },
-    "schema": [
-      {
-        "key": "allowAgentAllocation",
-        "type": "boolean",
-        "label": "Allow one-click agent allocation from the ticket inspector",
-        "defaultValue": false,
-        "description": "When on, the server this chip launches accepts local ALLOCATE AGENT requests: the inspector can open a terminal running `claude` primed on the selected ticket. Off, the endpoint answers 403 and the page never renders the button. Applies from the next server start; local instances only, either way."
-      }
-    ]
+    "allowMultiple": false
   }
 }

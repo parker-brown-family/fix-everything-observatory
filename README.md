@@ -81,13 +81,14 @@ the first full mine of the live repo replaces it when it lands (~13 minutes
 with a token, see **Coverage** below).
 
 Needs `python3` (stdlib only) and a browser. Optional: `gh` — its token is
-borrowed to raise the mining horizon (read-only calls to GitHub's public API) —
-and `claude`, only if you turn on agent allocation (below; off by default).
+borrowed to raise the mining horizon (read-only calls to GitHub's public API).
 
 What it touches: network to `api.github.com` only; the server binds
 `127.0.0.1`; the mined history is written to
 `~/.local/state/fix-everything-observatory/` and nothing is ever written into
-the plugin's own directory. No user configuration is modified.
+the plugin's own directory. No user configuration is modified. **It starts no
+processes** — there is no verb anywhere in the server that spawns one, which is
+a property the check battery asserts rather than a promise the README makes.
 
 Remove it the same way it came:
 
@@ -128,34 +129,6 @@ install`), delete `~/.local/share/applications/fix-everything-observatory.deskto
   an inspector: the whole chronological story — opened → labelled → commented →
   closed → reopened → merged — joined from the issues, comments, and events
   feeds, with real comment snippets and a GitHub link.
-- **Allocate an agent** — on an open ticket the inspector shows a one-click
-  `⚡ ALLOCATE AGENT` button, the omarchy error-notification pattern pointed at a
-  repair: it opens a terminal running `claude` primed with the ticket's title,
-  author, provenance, and latest comments. The brief is shaped by what the ticket
-  *is* — an issue gets a diagnosis job (orient, reproduce if it is safe, deliver a
-  hypothesis and the check that would refute it), a PR gets a review job (read the
-  diff, assess the claim on its merits, verdict of merge / changes / decline),
-  because telling a reviewer to "find the failure" invents one. It names a written
-  destination — `agent-report-<n>.md` in the state directory — since a report
-  left in a disposable
-  terminal's scrollback is a report nobody read, says this box is a live Omarchy
-  install (the honest repro surface, and the hazard), and never posts to GitHub
-  unasked. Before spawning its own `claude` the server preflights it — no
-  `claude` on PATH refuses the spawn outright, and a version `mise` reports as
-  behind warns in the inspector, because an older Claude Code cannot resolve
-  every configured model and that failure lands *inside* a terminal the button
-  has already called a success. The spawn itself holds the window open on any
-  nonzero exit and names the fix. Allocation is **off by default**: the server
-  refuses `/api/allocate` — and the page, which asks `/api/caps` what this
-  server is willing to do, never draws the button — unless the server was
-  launched with `FIX_OBSERVATORY_ALLOW_AGENTS=1`, which is exactly what the
-  widget's *allow agent allocation* setting does, from the next server start.
-  The button
-  exists only on a local instance — the page POSTs to the local server, which
-  spawns the agent; a hosted copy of the page has no server behind it and never
-  renders it. The endpoint requires a custom header, so a random web page cannot
-  fire it cross-origin. Point it at your own agent with `FIX_OBSERVATORY_AGENT_CMD`
-  (a shell template carrying `{prompt_file}`).
 - **Replay** — the footer is a media-player transport. `space` plays and
   pauses, `⏮`/`⏭` (`Home`/`End`) jump to the beginning or to now, and the rate
   button (`<`/`>`) runs history at 0.25×–4× of the base pace of one minute for
@@ -200,9 +173,8 @@ always returns one of the four above, so a manifest this miner produced has an
 explicit attribution on every artifact — but a manifest from an older schema, a
 half-written file, or somebody else's tooling might not, and the page will not
 quietly read that hole as `none`. It renders as a hollow mote, counts as
-**never scored** in the rail, and reaches an allocated agent's prompt spelled
-out. `none` is a finding; unmeasured is the absence of one, and they are not
-allowed to be the same grey dot.
+**never scored** in the rail. `none` is a finding; unmeasured is the absence of
+one, and they are not allowed to be the same grey dot.
 
 ## Parts
 
@@ -211,7 +183,7 @@ allowed to be the same grey dot.
 | `observatory.py` | Miner + server. Conditional (ETag) GitHub API calls: issues/PRs, repo-wide comments, repo-wide events. Scores smell, writes `manifest.{json,js}` into the state directory (`$XDG_STATE_HOME`, or `FIX_OBSERVATORY_STATE` to override), serves it at the `/data/` URL the page asks for. Stdlib only. Skips a cycle below 8 API requests remaining. |
 | `app/swarm.html` | The visualizer — single self-contained file, no build, so it lifts onto the site by copying it + the manifest. |
 | `induction.py` | Discovery and the check battery: walks the search directories for git work trees, reads each remote out of `.git/config` without spawning git, and runs the fifteen ordered checks that decide whether a repository can honestly be watched. Stdlib only. |
-| `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. Left-click ensures the server and opens the swarm; right-click opens the project picker; the widget's one setting is the agent-allocation toggle. |
+| `manifest.json` + `BarWidget.qml` | The Omarchy shell plugin — the 🌀 chip in the bar. Left-click ensures the server and opens the swarm; right-click opens the project picker. The widget has no settings and passes no environment to what it launches. |
 | `bin/render-icons.sh` | Renders the icons from the official Omarchy glyph (U+E900 in the `omarchy` font) — reproducible, pixel-faithful to the bar mark. |
 | `bin/fix-everything-observatory` | Entrypoint: `open [project] · daemon · mine · seed · serve · status · install · scan · preflight · induct · projects`. |
 | `seed/manifest.js.gz` | A mined manifest, committed. The server hands it over under the live manifest's name until the first cycle finishes, so a fresh clone opens on a full swarm rather than a thirteen-minute empty one. 1.2MB gzipped; the page dates it and says what it is. Refresh it with `bin/fix-everything-observatory seed`. |
@@ -276,9 +248,7 @@ claim as an empty comment.
 
 Env: `FIX_OBSERVATORY_REPO` (default `omacom/omarchy`), `FIX_OBSERVATORY_PORT` (4517),
 `FIX_OBSERVATORY_INTERVAL` (900s with a token, 300s without), `FIX_OBSERVATORY_MAX_PAGES`
-(safety cap on a walk), `FIX_OBSERVATORY_SNIPPETS` (1500), `FIX_OBSERVATORY_AGENT_CMD` (shell template
-for ALLOCATE AGENT, receives `{prompt_file}`; default opens `$TERMINAL`/alacritty
-running `claude`), `FIX_OBSERVATORY_AGENT_CWD` (default `$HOME`), `GITHUB_TOKEN` /
+(safety cap on a walk), `FIX_OBSERVATORY_SNIPPETS` (1500), `GITHUB_TOKEN` /
 `GH_TOKEN` (the difference between a slice and the repo).
 
 ## Toward wecanfixeverything.com

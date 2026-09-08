@@ -199,6 +199,39 @@ if [[ -f "$root/seed/manifest.js.gz" ]]; then
   [[ $sz -le 3000000 ]] || warn "seed is $((sz / 1000000))MB — heavier than a clone should carry"
 fi
 
+# The observatory observes, and that is now a checked property rather than a
+# promise in the README. Until v0.2.0 the ticket inspector carried a one-click
+# ALLOCATE AGENT button: the server built a prompt out of the ticket's title,
+# author and comments — text any stranger can write — and launched a fully
+# capable `claude` on it with the operator's credentials and a writable
+# checkout. A marketplace security review found it and the whole path came out.
+#
+# Three assertions keep it out. observatory.py is the process that reads mined
+# GitHub text, so it may not be able to start anything at all. induction.py may
+# still run `gh` (fixed argv, no ticket text anywhere near it), but nothing may
+# reach a shell or a detached child. And no shipped surface may carry the
+# endpoint, the button, or the environment flag that armed it.
+if grep -nE '(^|[^_[:alnum:]])(subprocess|Popen)' "$root/observatory.py" >/dev/null 2>&1; then
+  err "observatory.py can start a process again — the server that reads ticket text must not"
+else
+  ok "observatory.py cannot start a process"
+fi
+
+if grep -rnE 'shell=True|Popen|os\.system|os\.popen|os\.exec|start_new_session' \
+     "$root"/*.py >/dev/null 2>&1; then
+  err "a shell or detached child is back in the python — every spawn must be fixed argv"
+else
+  ok "no shell, no detached child, in either python file"
+fi
+
+if grep -rlE '/api/allocate|allowAgentAllocation|ALLOCATE AGENT|FIX_OBSERVATORY_ALLOW_AGENTS' \
+     "$root/app" "$root/observatory.py" "$root/manifest.json" "$root/BarWidget.qml" \
+     >/dev/null 2>&1; then
+  err "the agent-allocation surface is back in a shipped file — it was removed under security review"
+else
+  ok "no agent-allocation surface in any shipped file"
+fi
+
 # House rule, machine-absolute: no AI is ever credited in this history.
 if git -C "$root" log --format=%B 2>/dev/null \
    | grep -qiE 'co-authored-by:.*(claude|copilot|codex|gemini|aider)|generated with \[?claude'; then

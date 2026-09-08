@@ -11,8 +11,8 @@ Doctrine:
 - Unknown is never zero: coverage gaps, rate budget, and horizon are recorded.
 - classify() always returns an explicit attribution, so every artifact this
   miner writes carries one. The page still keeps a fifth value, 'unmeasured',
-  for a manifest that does not — it renders as a hollow mote and reaches an
-  allocated agent's prompt spelled out, because a hole is not a clean score.
+  for a manifest that does not — it renders as a hollow mote and counts as
+  never scored, because a hole is not a clean score.
 - All requests are conditional (ETags); 304s are free against the rate limit.
 
 Stdlib only. With GITHUB_TOKEN / GH_TOKEN every stream is walked to its end;
@@ -28,9 +28,7 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -119,21 +117,6 @@ EVENT_PAGE_CAP = 300
 # An exhaustive cycle is ~600 conditional round trips. They cost nothing against
 # the rate limit (a 304 is free) but they cost wall clock, so it beats slower.
 INTERVAL = int(os.environ.get("FIX_OBSERVATORY_INTERVAL", "900" if TOKEN else "300"))
-# One-click agent allocation, the omarchy error-notification pattern pointed at a
-# ticket: the page POSTs an issue number, the server writes a context-rich prompt
-# and opens a terminal running `claude` primed on it. Local instances only — the
-# server binds 127.0.0.1, and a hosted copy of the page never renders the button.
-#
-# OFF unless the person running the server turned it on: a marketplace install
-# must not ship a process-spawning endpoint armed, however local. The bar
-# widget's settings toggle sets this flag on the launch it makes; /api/caps
-# tells the page which posture this server was born with, so the button only
-# renders against a server that would honour it. The flag is read once at
-# start on purpose — an armed/disarmed state that could be flipped over an
-# unauthenticated local socket would not be a posture, just a request away.
-ALLOW_AGENTS = os.environ.get("FIX_OBSERVATORY_ALLOW_AGENTS") == "1"
-AGENT_CMD = os.environ.get("FIX_OBSERVATORY_AGENT_CMD")   # shell template; {prompt_file}
-AGENT_CWD = os.environ.get("FIX_OBSERVATORY_AGENT_CWD", str(Path.home()))
 MIN_BUDGET = 8  # skip a cycle rather than spend the last requests
 
 MARKER_RE = re.compile(r"<!--\s*omarchy-fix-event:v(\d+)\s*(.*?)-->", re.S)
@@ -478,8 +461,8 @@ def adopt_flat_state() -> None:
     """Carry a pre-0.3 single-project state directory into projects/<slug>/.
 
     Until the observatory could watch more than one repository, everything the
-    miner wrote sat directly in the state directory: one manifest, one cache,
-    one set of agent prompts. Now that a slug owns each of those, the flat copy
+    miner wrote sat directly in the state directory: one manifest and one
+    cache. Now that a slug owns each of those, the flat copy
     has to move under the slug the built-in repository resolves to, or the
     first start after an upgrade shows an empty instrument and quietly begins
     a thirteen-minute re-mine of history that is already on the disk.
@@ -934,289 +917,13 @@ def mine_once(proj: "Project | None" = None) -> None:
         f"err={err}")
 
 
-# ---- agent allocation ----------------------------------------------------------
-def find_terminal():
-    for t in ([os.environ.get("TERMINAL")] if os.environ.get("TERMINAL") else []) + [
-            "alacritty", "ghostty", "kitty", "foot", "wezterm", "xterm"]:
-        if t and shutil.which(t):
-            return t
-    return None
-
-
-# The prompt is the entire briefing an allocated agent ever gets, so it carries
-# four things the ticket itself does not. What KIND of job this is: a bug report
-# is diagnosed, a proposed change is REVIEWED, and telling a reviewer to "state
-# what the failure actually is" invents a failure for a PR that is working as
-# intended. Where the deliverable goes: a report that ends in the agent's
-# scrollback is a report nobody read. What machine it is standing on: this box
-# is a live Omarchy install, which is both the honest reproduction surface and
-# the thing it can break. And what our own attribution field means, which is
-# private vocabulary a fresh agent has never seen.
-ATTRIBUTION_GLOSS = {
-    "marker": "carries the omarchy-fix-event:v1 marker — definitively autospawned",
-    "smell": "scored >= 2 on our named agent-smell signals — probably agent-written",
-    "hint": "one weak agent-smell signal — suggestive, not evidence",
-    "none": "no agent signal in the title or body — human, as far as we looked",
-}
-
-
-def attribution_phrase(art) -> str:
-    """Absent is not "none".
-
-    An artifact whose attribution was never recorded is UNMEASURED, and the
-    prompt has to say so: "none" tells the agent we scored this ticket and it
-    came up clean, which is a different claim from never having scored it.
-    """
-    value = art.get("attribution")
-    if not value:
-        return "unmeasured — never scored, which is NOT the same as scoring clean"
-    gloss = ATTRIBUTION_GLOSS.get(value, "unrecognised class; treat as unmeasured")
-    return f"{value} — {gloss}"
-
-
-ISSUE_JOB = [
-    "2. Orient: find the code, config, or subsystem this points at, and state",
-    "   what the failure actually is in your own words.",
-    "3. If it can be reproduced safely on this machine, try; otherwise say",
-    "   exactly what a reproduction would need.",
-    "4. Deliver: a diagnosis hypothesis, the check that would confirm or refute",
-    "   it, and concrete suggested next steps (or a fix sketch).",
-]
-
-PR_JOB = [
-    "2. Read the change itself:  gh pr diff {n} --repo {repo}",
-    "3. Assess the CLAIM, not a failure — this is a proposed change, and there",
-    "   may be nothing wrong with it. Does the diff do what its description",
-    "   says? Is that the right thing to do here? Name what it breaks, what it",
-    "   leaves unhandled, and what it duplicates.",
-    "4. Exercise it only through steps you can revert — read the files it",
-    "   touches, check it out in a scratch clone. Say plainly what you did NOT",
-    "   run, and why.",
-    "5. Deliver a verdict — MERGE / CHANGES REQUESTED / DECLINE — with specific",
-    "   reasons, per hunk where it matters.",
-]
-
-
-def report_path(proj: "Project", number) -> Path:
-    return proj.dir / f"agent-report-{number}.md"
-
-
-def agent_prompt(proj: "Project", art, comments) -> str:
-    REPO = proj.repo
-    kind = art.get("kind") or "issue"
-    n = art.get("number")
-    gh_verb = "pr" if kind == "pr" else "issue"
-    recent = [c for c in comments if c.get("number") == n and c.get("snippet")][-3:]
-    lines = [
-        "You are a disposable repair agent, allocated with one click from the",
-        "Fix-Everything Observatory for this ticket:",
-        "",
-        f"  {REPO}#{n} — {art.get('title') or '(untitled)'}",
-        f"  {art.get('url') or ''}",
-        f"  {kind} · opened {art.get('opened_at')} by @{art.get('author')}",
-        f"  attribution: {attribution_phrase(art)}",
-    ]
-    if art.get("labels"):
-        lines.append("  labels: " + ", ".join(art["labels"]))
-    if recent:
-        lines += [""] + ["Recent comments:"] + [
-            f"  - @{c.get('author')}: \"{c.get('snippet')}\"" for c in recent]
-    job = PR_JOB if kind == "pr" else ISSUE_JOB
-    lines += [
-        "",
-        "Your job, in order:",
-        f"1. Read the whole thread:  gh {gh_verb} view {n} --repo {REPO} --comments",
-    ] + [step.format(n=n, repo=REPO) for step in job] + [
-        "",
-        "Write the deliverable here — markdown, and it IS the report.",
-        "Scrollback is not: this terminal is disposable and nobody will",
-        "scroll it.",
-        "",
-        f"  {report_path(proj, n)}",
-        "",
-        "Say what you checked, what you could NOT check, and what you are",
-        "only guessing. Unknown is not zero here either.",
-        "",
-    ] + _machine_paragraph(proj) + [
-        "",
-        "Do NOT post to GitHub or take any public action unless explicitly asked.",
-        "",
-    ]
-    return "\n".join(lines)
-
-
-# The reproduction surface, which stopped being one fixed thing the moment the
-# observatory could be pointed at any repository on the machine. Three cases,
-# and getting them wrong in either direction costs something real: telling an
-# agent it is standing on a live install of the thing it is debugging, when it
-# is not, invites destructive "reproduction" of a system nobody has; NOT
-# telling it when it is true removes the one warning that keeps omarchy-update
-# from being run to test a theory.
-OMARCHY_MACHINE = [
-    "This machine is a LIVE OMARCHY INSTALL — the same system the ticket is",
-    "about. That makes it the honest reproduction surface and the hazard at",
-    "once. Read anything; run nothing that installs, overwrites, or updates",
-    "in order to test a theory. Prefer a copy under /tmp to touching",
-    "~/.config or ~/.local/share/omarchy, and never run omarchy-update.",
-]
-
-
-def _machine_paragraph(proj: "Project") -> list:
-    if proj.repo == DEFAULT_REPO and Path.home().joinpath(
-            ".local/share/omarchy").exists():
-        return OMARCHY_MACHINE
-    if proj.path and Path(proj.path).is_dir():
-        return [
-            f"The repository is checked out on this machine at {proj.path} —",
-            "read it, search it, run its tests. Treat the working tree as",
-            "someone else's: do not commit, push, stash, switch branches, or",
-            "run anything that rewrites it. If you need to build or mutate it,",
-            "clone it to /tmp first and say in the report that you did.",
-        ]
-    return [
-        "There is no local checkout of this repository on this machine, so the",
-        "code is reachable only through the API and a clone you make yourself.",
-        "Put any clone under /tmp. Say plainly in the report which claims you",
-        "verified against real code and which came from reading the thread —",
-        "they are different kinds of evidence and only one of them is strong.",
-    ]
-
-
-# What the terminal runs when we spawn `claude` ourselves. It holds the window
-# open on ANY nonzero exit and says what the failure means, because the button
-# has already told the user "AGENT SPAWNED" by the time this fires. The one
-# that bit us: Claude Code v2.1.251 could not resolve the configured model
-# alias and died with "There's an issue with the selected model (default)" —
-# an agent dead on arrival behind a button that looked like it worked. We
-# cannot preflight that (proving the model resolves costs a real session), so
-# we name the fix where the failure actually surfaces.
-AGENT_SHELL = (
-    'claude "$(cat {prompt})"; rc=$?; [ "$rc" -eq 0 ] && exit 0; echo; '
-    'echo "[fix-everything-observatory] claude exited $rc — the agent never ran."; '
-    'echo "  If it named a model it does not recognise, your Claude Code is too'
-    ' old for your configured model. Fix:  mise upgrade claude"; '
-    'echo "  The prompt is kept at {prompt} — nothing was lost."; '
-    'echo; echo "[enter closes this window]"; read -r'
-)
-PREFLIGHT_TIMEOUT = 6
-
-
-def mise_outdated(tool: str):
-    """(installed, latest) when mise says the tool is behind — else None.
-
-    None means UNKNOWN, never "up to date": mise may be absent, may not manage
-    this tool, or may fail. `mise outdated` lists only what IS behind, so a line
-    for the tool is the finding and no line is silence, not a clean bill.
-    """
-    if not shutil.which("mise"):
-        return None
-    try:
-        p = subprocess.run(["mise", "outdated", tool], capture_output=True,
-                           text=True, timeout=PREFLIGHT_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    for line in (p.stdout or "").splitlines():
-        f = line.split()
-        if len(f) >= 4 and f[0] == tool:
-            return f[2], f[3]
-    return None
-
-
-def claude_preflight():
-    """Is the agent we are about to spawn runnable at all? -> (ok, note).
-
-    Deliberately modest about what it can prove. That `claude` exists on PATH
-    and answers `--version` is checkable in a few milliseconds and worth
-    refusing on. That its configured model resolves is NOT checkable without
-    paying for a session, so this never claims it — a note is a warning the
-    page shows beside a spawn that still happens, never a silent pass.
-    """
-    exe = shutil.which("claude")
-    if not exe:
-        return False, ("no `claude` on PATH — install Claude Code, or point "
-                       "FIX_OBSERVATORY_AGENT_CMD at your own agent")
-    try:
-        p = subprocess.run([exe, "--version"], capture_output=True, text=True,
-                           timeout=PREFLIGHT_TIMEOUT, env=clean_agent_env())
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return True, f"`claude --version` did not answer ({exc}) — spawning anyway"
-    if p.returncode != 0:
-        return True, (f"`claude --version` exited {p.returncode} — spawning anyway; "
-                      "if the terminal dies on a model error, run `mise upgrade claude`")
-    ver = (p.stdout or "").strip()
-    behind = mise_outdated("claude")
-    if behind:
-        return True, (f"claude {behind[0]} is behind {behind[1]} — an older Claude Code "
-                      "cannot resolve every configured model, and that failure lands "
-                      "inside the spawned terminal. Fix: mise upgrade claude")
-    return True, f"claude {ver}" if ver else None
-
-
-def clean_agent_env():
-    """The environment a freshly-launched claude should see — never a child of us.
-
-    If the tracker server was itself started from inside a Claude Code session
-    (running `serve` from a claude shell, say), it inherits that session's
-    CLAUDE_CODE_* markers, and a naive spawn passes them down: the allocated
-    agent then comes up as a CHILD session with transcript saving off and a
-    pinned model it may not resolve. Stripping every CLAUDE_CODE_* var (and a
-    couple of model pins) makes it a normal top-level session that reads the
-    user's settings fresh — the same session they'd get typing `claude`.
-    """
-    drop = ("CLAUDE_CODE_", "CLAUDECODE", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")
-    return {k: v for k, v in os.environ.items() if not k.startswith(drop)}
-
-
-def allocate_agent(proj: "Project", number: int):
-    """Returns (error, warning). Either may be None; an error means no spawn."""
-    try:
-        manifest = json.loads(proj.manifest_path.read_text())
-    except Exception as exc:
-        return f"manifest unreadable: {exc}", None
-    art = next((a for a in manifest.get("artifacts", [])
-                if a.get("number") == number), None)
-    if art is None:
-        return f"{proj.repo}#{number} is not in the manifest", None
-    proj.dir.mkdir(parents=True, exist_ok=True)
-    pf = proj.dir / f"agent-prompt-{number}.md"
-    pf.write_text(agent_prompt(proj, art, manifest.get("comments") or []))
-    q = shlex.quote(str(pf))
-    # A custom agent command is the operator's business — we preflight only the
-    # `claude` we chose to run ourselves.
-    note = None
-    if AGENT_CMD:
-        cmd = ["bash", "-lc", AGENT_CMD.format(prompt_file=q)]
-    else:
-        term = find_terminal()
-        if not term:
-            return "no terminal emulator found — set FIX_OBSERVATORY_AGENT_CMD", None
-        ok, note = claude_preflight()
-        if not ok:
-            return note, None
-        cmd = [term, "-e", "bash", "-lc", AGENT_SHELL.format(prompt=q)]
-    # The agent starts where the code is when we know where that is. An agent
-    # for a repository checked out on this machine that opens in $HOME has to
-    # find its own way there, and the one thing it should not have to guess is
-    # which of several similarly-named directories the ticket is about.
-    cwd = proj.path if (proj.path and Path(proj.path).is_dir()) else AGENT_CWD
-    try:
-        subprocess.Popen(cmd, cwd=cwd, start_new_session=True,
-                         env=clean_agent_env(),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as exc:
-        return f"spawn failed: {exc}", None
-    log(f"allocated agent for {proj.repo}#{number} ({cmd[0]} in {cwd}"
-        f"{'; ' + note if note else ''})")
-    return None, note
-
-
 # ---- server -------------------------------------------------------------------
 # Which API routes read and which write. Only used to answer HEAD with an
 # honest Allow header, but keeping the two lists named is what stops a route
 # being added to one half and silently inheriting the other half's manners.
 READ_ROUTES = frozenset({"/api/caps", "/api/projects", "/api/scan",
                          "/api/preflight", "/api/complete"})
-WRITE_ROUTES = frozenset({"/api/allocate", "/api/induct", "/api/forget",
+WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
                           "/api/active", "/api/roots", "/api/mine"})
 
 
@@ -1254,11 +961,12 @@ class QuietHandler(SimpleHTTPRequestHandler):
         path = self.path.split("?")[0]
         q = self._query()
 
-        # What this server is willing to do, so the page never draws a button
-        # the server would refuse. One static answer per process lifetime.
+        # What this server is willing to do. It reads, it mines, it registers
+        # a repository to watch. There is no verb here that starts a process,
+        # and this endpoint is where that stays visible to the page.
+        # One static answer per process lifetime.
         if path == "/api/caps":
-            self._json(200, {"allocate": ALLOW_AGENTS, "projects": True,
-                             "induct": True})
+            self._json(200, {"projects": True, "induct": True})
             return
 
         # ---- the observatory directory: what is watched, and what could be
@@ -1425,25 +1133,6 @@ class QuietHandler(SimpleHTTPRequestHandler):
             self.send_error(403, "missing X-Fix-Observatory header")
             return
         body = self._body()
-
-        if path == "/api/allocate":
-            if not ALLOW_AGENTS:
-                self._json(403, {
-                    "ok": False,
-                    "error": "agent allocation is off for this server — enable "
-                             "the widget's 'allow agent allocation' setting (or "
-                             "launch with FIX_OBSERVATORY_ALLOW_AGENTS=1) and "
-                             "reopen"})
-                return
-            try:
-                number = int(body.get("number"))
-            except (ValueError, TypeError):
-                self._json(400, {"ok": False, "error": "bad body"})
-                return
-            err, note = allocate_agent(project(body.get("project")), number)
-            self._json(200 if err is None else 409,
-                       {"ok": err is None, "error": err, "note": note})
-            return
 
         if path == "/api/induct":
             self._json(*induct(body.get("path") or ""))

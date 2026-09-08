@@ -64,15 +64,6 @@ Panel {
   readonly property string port: Quickshell.env("FIX_OBSERVATORY_PORT") || "4517"
   readonly property string api: "http://127.0.0.1:" + root.port
 
-  // Off by default, and only ever turned on by a person in the widget's
-  // settings: the server the chip launches refuses /api/allocate without the
-  // matching environment flag, and the page never renders the ALLOCATE AGENT
-  // button against a server that refuses it. The flag rides the launch, so a
-  // change here applies from the next server start — an already-running
-  // server keeps the posture it was born with rather than being reconfigured
-  // over an unauthenticated local socket.
-  readonly property bool allowAgents: setting("allowAgentAllocation", false)
-
   // ------------------------------------------------------------------ model
   //
   // Three things, kept apart on purpose. `projects` is what the observatory
@@ -90,12 +81,8 @@ Panel {
   property bool reachable: false
   property bool scanned: false
 
-  function envPrefix() {
-    return root.allowAgents ? ["env", "FIX_OBSERVATORY_ALLOW_AGENTS=1"] : []
-  }
-
   function run(args) {
-    Quickshell.execDetached(root.envPrefix().concat([root.launcher]).concat(args))
+    Quickshell.execDetached([root.launcher].concat(args))
   }
 
   function openObservatory(slug) {
