@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WATCHMENU C — type-in-place combobox</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500;700&display=swap">
+<style>
+  /* Tokyo Night, lifted verbatim from app/swarm.html */
+  :root{
+    --bg:#1a1b26; --bg2:#16161e; --panel:#1f2335; --line:#2a2f44;
+    --dim:#414868; --ghost:#565f89; --fg:#c0caf5; --blue:#7aa2f7;
+    --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --yellow:#e0af68;
+    --violet:#bb9af7; --white:#ffffff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{color-scheme:dark}
+  body{
+    background:var(--bg); color:var(--blue);
+    font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:300;
+    min-height:100vh; padding:16px 20px 40px;
+  }
+  button{
+    font:inherit;font-size:10.5px;letter-spacing:.08em;padding:6px 11px;cursor:pointer;
+    background:transparent;color:var(--cyan);border:1px solid var(--dim);
+    white-space:nowrap;
+  }
+  button:hover{border-color:var(--cyan)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+  /* ===== the rig ===== */
+  .rig{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;margin-bottom:10px}
+  .rig .rl{font-size:9px;letter-spacing:.22em;color:var(--ghost)}
+  .rig .grp{display:flex;align-items:center;gap:6px}
+  .rig button.on{color:var(--green);border-color:var(--green)}
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:260px;height:3px;background:var(--line);outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:9px;height:20px;background:var(--cyan);cursor:ew-resize;border:0;
+  }
+  input[type=range]::-moz-range-thumb{width:9px;height:20px;background:var(--cyan);cursor:ew-resize;border:0;border-radius:0}
+  select{
+    font:inherit;font-size:10.5px;letter-spacing:.04em;background:var(--bg2);color:var(--fg);
+    border:1px solid var(--dim);padding:5px 7px;outline:none;
+  }
+  select:focus{border-color:var(--cyan)}
+
+  /* ===== the measurement readout: the 80% rule, made visible ===== */
+  .meter{margin:0 0 14px;max-width:900px}
+  .mtrack{position:relative;height:9px;background:var(--bg2);border:1px solid var(--line)}
+  .mfill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--blue);transition:width .06s linear}
+  .mfill.over{background:var(--yellow)}
+  .mtick{position:absolute;left:80%;top:-5px;bottom:-5px;border-left:1px solid var(--red)}
+  .mtick span{position:absolute;left:5px;top:-14px;font-size:8px;letter-spacing:.16em;color:var(--red)}
+  .mnums{margin-top:9px;font-size:9.5px;letter-spacing:.06em;color:var(--ghost);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mnums b{color:var(--fg);font-weight:500}
+  .mnums .v{color:var(--green);font-weight:700;letter-spacing:.16em}
+  .mnums .v.coll{color:var(--yellow)}
+
+  /* ===== the fake viewport ===== */
+  .holder{position:relative;overflow:hidden;margin-bottom:16px}
+  .scaler{transform-origin:top left}
+  .stage{
+    position:relative;height:560px;overflow:hidden;background:var(--bg);
+    border:1px solid var(--dim);display:flex;flex-direction:column;
+  }
+  .grip{
+    position:absolute;top:0;right:0;bottom:0;width:9px;cursor:ew-resize;z-index:30;
+    background:repeating-linear-gradient(0deg,var(--dim) 0 2px,transparent 2px 6px);
+    opacity:.5;
+  }
+  .grip:hover{opacity:1;background:repeating-linear-gradient(0deg,var(--cyan) 0 2px,transparent 2px 6px)}
+  .fhead{
+    display:flex;align-items:center;gap:16px;padding:9px 20px;flex:none;
+    background:var(--bg2);border-bottom:1px solid var(--line);
+  }
+  .fhead h1{font-size:13px;font-weight:700;letter-spacing:.14em;color:var(--white)}
+  .fhead h1 small{display:block;font-size:8.5px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:2px}
+  .fhead .fsp{flex:1}
+  .fstats{display:flex;flex:none;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .fstat{padding:8px 20px;border-right:1px solid var(--line)}
+  .fstat b{display:block;font-size:15px;color:var(--white);font-weight:700}
+  .fstat span{font-size:8.5px;letter-spacing:.18em;color:var(--ghost)}
+  .fbody{flex:1;min-height:0;background:
+    repeating-linear-gradient(135deg,transparent 0 9px,rgba(42,47,68,.30) 9px 10px)}
+
+  /* ===================================================================
+     BELOW THE THRESHOLD — the tab strip, unchanged. Every rule in this
+     block is copied verbatim out of app/swarm.html so a reviewer can see
+     that the sub-threshold state is not redesigned, only replaced.
+     =================================================================== */
+  /* class, not id, so the ghost below is laid out by the very same rules —
+     a ghost that measures a different box measures nothing worth having */
+  .pstrip{display:flex;align-items:stretch;gap:7px;background:var(--bg2);overflow-x:auto}
+  .pstrip.on{padding:8px 14px;border-bottom:1px solid var(--line)}
+  .plabel{align-self:center;flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);margin-right:5px}
+  .ptab{
+    flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+    padding:7px 14px 8px;max-width:340px;
+  }
+  .ptab:hover{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .ptab.here{border-left-color:var(--green);background:var(--line)}
+  .ptab.want{border-left-color:var(--cyan)}
+  .ptab .pn{display:flex;align-items:baseline;gap:6px;font-size:13px}
+  .ptab .pn .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .ptab .pn .dbadge{flex:none;margin-left:0}
+  .ptab .pn b{color:var(--white);font-weight:700}
+  .ptab .pn i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .ptab.here .pn b{color:var(--green)}
+  .ptab .pm{display:block;font-size:9.5px;color:var(--ghost);margin-top:2.5px;white-space:nowrap}
+  .ptab .pm b{color:var(--blue);font-weight:500}
+  .pmore{flex:none;align-self:center;font-size:10px;letter-spacing:.1em;border-style:dashed;padding:8px 12px}
+  .pnote{align-self:center;flex:none;font-size:9.5px;color:var(--yellow);max-width:300px;white-space:normal;line-height:1.4}
+  .pnote b{color:var(--fg);font-weight:500}
+
+  .dbadge{
+    display:inline-block;font-size:8px;letter-spacing:.1em;padding:1px 5px 2px;margin-left:6px;
+    border:1px solid var(--dim);color:var(--ghost);vertical-align:1px;
+  }
+  .dbadge.seed{border-color:var(--yellow);color:var(--yellow)}
+  .dbadge.mining{border-color:var(--cyan);color:var(--cyan)}
+  .dbadge.watched{border-color:var(--green);color:var(--green)}
+  .dbadge.fail{border-color:var(--red);color:var(--red)}
+  .dbadge.unmined{
+    border-color:var(--dim);color:var(--ghost);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.45) 3px 6px);
+  }
+
+  /* ===================================================================
+     THE GHOST. The strip is rendered a second time here, absolutely
+     positioned at width:max-content and visibility:hidden — laid out, but
+     out of flow and off the a11y tree. This is the only honest way to know
+     the strip's NATURAL width while the strip is not on screen: once
+     collapsed, the real strip is display:none and measures nothing.
+     =================================================================== */
+  .ghostholder{position:relative;height:0}
+  #ghost{
+    position:absolute;left:0;top:0;width:max-content;overflow:visible;
+    visibility:hidden;pointer-events:none;
+  }
+
+  /* ===================================================================
+     AT OR ABOVE THE THRESHOLD — DIRECTION C, the type-in-place combobox.
+     One control with one state that morphs. The closed face and the input
+     occupy the SAME grid cell at the SAME font size and left offset, so
+     the repo name does not move aside for the caret — the caret arrives
+     where the repo name was.
+     =================================================================== */
+  .wwrap{
+    display:none;align-items:flex-start;gap:9px;
+    padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--line);
+  }
+  .host.collapsed #projstrip{display:none}
+  .host.collapsed .wwrap{display:flex}
+  .host.solo #projstrip,.host.solo .wwrap{display:none}
+
+  .wcombo{position:relative;flex:1 1 auto;min-width:0;max-width:540px}
+
+  .wctl{
+    display:flex;align-items:flex-start;gap:10px;cursor:text;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    padding:7px 12px 8px;
+  }
+  .wctl:hover{border-color:var(--cyan);border-left-color:var(--green)}
+  .wcombo.focus .wctl,.wcombo.open .wctl{border-color:var(--cyan);border-left-color:var(--green)}
+
+  .wface{flex:1;min-width:0;display:grid;grid-template-rows:auto auto auto}
+  .wl1,.wl2,.wwarn{min-width:0}
+
+  /* line 1: the summary and the input, stacked in one cell */
+  .wl1{display:grid;min-height:18px}
+  .wsum,.wq{grid-area:1/1;font-size:13px;line-height:18px;letter-spacing:0}
+  .wsum{
+    display:flex;align-items:baseline;gap:6px;min-width:0;pointer-events:none;
+    opacity:1;transform:none;transition:opacity .09s linear,transform .09s ease-out;
+  }
+  .wsumt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .wsum b{color:var(--green);font-weight:700}
+  .wsum i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .wsum .dbadge{flex:none;margin-left:0}
+  .wq{
+    width:100%;min-width:0;font-family:inherit;font-weight:500;
+    background:transparent;border:none;outline:none;padding:0;margin:0;
+    color:transparent;caret-color:transparent;
+  }
+  .wq::placeholder{color:transparent}
+  .wcombo.open .wsum{opacity:0;transform:translateX(3px)}
+  .wcombo.open .wq{color:var(--fg);caret-color:var(--cyan)}
+  .wcombo.open .wq::placeholder{color:var(--dim)}
+
+  /* line 2: metadata, which DEMOTES into the keeper line while typing.
+     The project you are looking at never leaves the control — it moves
+     down one line and stays green. */
+  .wl2{display:grid;min-height:14px;margin-top:2.5px}
+  .wmeta,.wkeep{
+    grid-area:1/1;display:flex;align-items:baseline;gap:6px;min-width:0;
+    font-size:9.5px;line-height:14px;color:var(--ghost);white-space:nowrap;
+    transition:opacity .09s linear;
+  }
+  .wmetat,.wkeept{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .wmeta b{color:var(--blue);font-weight:500}
+  .wmeta .dbadge,.wkeep .dbadge{flex:none;margin-left:0;vertical-align:0}
+  .wkeep{opacity:0;pointer-events:none}
+  .wkeep .k{flex:none;font-size:8.5px;letter-spacing:.18em;color:var(--ghost)}
+  .wkeep b{color:var(--green);font-weight:700}
+  .wkeep u{color:var(--blue);font-weight:500;text-decoration:none}
+  .wcombo.open .wmeta{opacity:0}
+  .wcombo.open .wkeep{opacity:1}
+
+  /* line 3: the mismatch warning, inside the control's own border */
+  .wwarn{display:none;margin-top:7px;padding-top:6px;border-top:1px dashed var(--dim);
+    font-size:9.5px;line-height:1.45;color:var(--yellow);white-space:normal}
+  .wcombo.mismatch .wwarn{display:block}
+  .wwarn b{color:var(--fg);font-weight:500}
+
+  /* the cue: a chevron when closed, a live match count while typing */
+  .wcue{
+    flex:none;margin-top:2px;font-size:9px;letter-spacing:.14em;color:var(--ghost);
+    min-width:38px;text-align:right;
+  }
+  .wcombo.open .wcue{color:var(--cyan)}
+  .wcombo.open .wcue.none{color:var(--yellow)}
+
+  /* the list — geometry and colours of #dcomplete / .drow in swarm.html */
+  .wlist{
+    position:absolute;left:0;right:0;top:calc(100% - 1px);z-index:14;display:none;
+    background:var(--panel);border:1px solid var(--cyan);border-top:none;
+    max-height:292px;overflow:auto;padding:3px;
+    box-shadow:0 18px 44px rgba(0,0,0,.55);
+  }
+  .wcombo.open .wlist{display:block}
+  .wrow{
+    display:block;width:100%;text-align:left;background:var(--panel);
+    border:1px solid transparent;border-left:2px solid var(--dim);
+    padding:7px 10px;margin-bottom:2px;cursor:pointer;font:inherit;color:var(--fg);
+  }
+  .wrow:last-child{margin-bottom:0}
+  .wrow.cur{background:var(--line);border-color:var(--dim);border-left-color:var(--cyan)}
+  .wrow.here{border-left-color:var(--green)}
+  .wrow .wn{display:flex;align-items:baseline;gap:6px;font-size:11.5px;min-width:0}
+  .wrow .wnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .wrow .wn b{color:var(--white);font-weight:700}
+  .wrow .wn i{color:var(--ghost);font-style:normal;font-size:9.5px;letter-spacing:.04em}
+  .wrow.here .wn b{color:var(--green)}
+  .wrow .wn .dbadge{flex:none;margin-left:0}
+  .wrow .wm{display:flex;align-items:baseline;gap:6px;font-size:9.5px;color:var(--ghost);margin-top:2px;min-width:0}
+  .wrow .wmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .wrow .wm b{color:var(--blue);font-weight:500}
+  .wrow .wm .dbadge{flex:none;margin-left:0}
+  /* matched characters */
+  .wrow em{font-style:normal;color:var(--cyan);background:rgba(125,207,255,.13)}
+  .wrow.here em{color:var(--cyan)}
+
+  /* the two pinned rows: stuck to the scroll edges so neither the repair
+     nor the induction can be scrolled out of reach, and neither filtered */
+  .wrow.pin{position:sticky;z-index:2;background:var(--bg2)}
+  .wrow.repair{top:0;border-left-color:var(--yellow);margin-bottom:3px}
+  .wrow.repair .wn{font-size:10px;letter-spacing:.06em;color:var(--yellow)}
+  .wrow.repair .wn b{color:var(--white);font-weight:700}
+  .wrow.repair .wm{color:var(--ghost)}
+  .wrow.repair.cur{background:var(--line);border-color:var(--yellow);border-left-color:var(--yellow)}
+  .wrow.more{
+    bottom:0;border:1px dashed var(--dim);border-left:2px solid var(--dim);
+    margin-top:3px;margin-bottom:0;
+  }
+  .wrow.more .wn{font-size:10px;letter-spacing:.1em;color:var(--cyan)}
+  .wrow.more .wn b{color:var(--cyan);font-weight:500}
+  .wrow.more .wm{color:var(--ghost)}
+  .wrow.more .wm u{color:var(--cyan);text-decoration:none}
+  .wrow.more.cur{background:var(--line);border-color:var(--cyan);border-left-color:var(--cyan)}
+  .wempty{padding:9px 10px 10px;font-size:10px;color:var(--ghost);line-height:1.6}
+  .wempty b{color:var(--yellow);font-weight:500}
+
+  /* the toast the demo uses to prove an action fired */
+  .toast{
+    position:absolute;left:14px;bottom:14px;z-index:40;max-width:70%;
+    background:var(--panel);border:1px solid var(--violet);border-left:3px solid var(--violet);
+    color:var(--fg);font-size:10.5px;letter-spacing:.04em;padding:8px 12px 9px;
+    opacity:0;transform:translateY(4px);transition:opacity .12s linear,transform .12s ease-out;
+    pointer-events:none;
+  }
+  .toast.on{opacity:1;transform:none}
+  .toast b{color:var(--violet);font-weight:700}
+
+  @media (prefers-reduced-motion:reduce){
+    .wsum,.wmeta,.wkeep,.mfill,.toast{transition:none}
+    .wcombo.open .wsum{transform:none}
+  }
+
+  /* ===== legend ===== */
+  .legend{max-width:900px;border:1px solid var(--line);background:var(--bg2);padding:12px 16px 14px}
+  .legend h2{font-size:9px;letter-spacing:.22em;color:var(--ghost);font-weight:500;margin-bottom:9px}
+  .legend ol{list-style:none;counter-reset:n}
+  .legend li{
+    counter-increment:n;position:relative;padding:0 0 0 26px;margin-bottom:6px;
+    font-size:11px;line-height:1.6;color:var(--fg);
+  }
+  .legend li::before{
+    content:counter(n,decimal-leading-zero);position:absolute;left:0;top:0;
+    font-size:9px;color:var(--dim);letter-spacing:.1em;
+  }
+  .legend kbd{
+    font:inherit;font-size:10px;color:var(--cyan);border:1px solid var(--dim);
+    padding:1px 5px 2px;letter-spacing:.06em;
+  }
+  .legend em{font-style:normal;color:var(--ghost)}
+</style>
+</head>
+<body>
+
+<div class="rig">
+  <div class="grp">
+    <span class="rl">VIEWPORT</span>
+    <input type="range" id="wslider" min="480" max="3600" step="4" value="1280" aria-label="viewport width">
+    <span class="rl" id="wnum" style="min-width:64px">1280px</span>
+    <button id="wedge" title="park the viewport just wide enough for the strip — then drag left to watch it collapse">&#8596; TO THE EDGE</button>
+  </div>
+  <div class="grp">
+    <span class="rl">WATCHING</span>
+    <button data-n="3">3</button><button data-n="4">4</button><button data-n="6">6</button><button data-n="9" class="on">9</button><button data-n="12">12</button>
+  </div>
+  <div class="grp">
+    <span class="rl">URL SAYS</span>
+    <select id="wmis">
+      <option value="none">matches the server</option>
+      <option value="watched">a different watched project</option>
+      <option value="unknown">a project nobody watches</option>
+    </select>
+  </div>
+</div>
+
+<div class="meter">
+  <div class="mtrack">
+    <div class="mfill" id="mfill"></div>
+    <div class="mtick"><span>80%</span></div>
+  </div>
+  <div class="mnums" id="mnums">&nbsp;</div>
+</div>
+
+<div class="holder" id="holder">
+  <div class="scaler" id="scaler">
+    <div class="stage" id="stage">
+      <div class="fhead">
+        <h1>FIX EVERYTHING<small>OBSERVATORY</small></h1>
+        <div class="fsp"></div>
+      </div>
+
+      <div class="host" id="host">
+        <!-- BELOW THRESHOLD -->
+        <nav id="projstrip" class="pstrip on" aria-label="watched projects"></nav>
+
+        <!-- AT OR ABOVE THRESHOLD -->
+        <div class="wwrap">
+          <span class="plabel">WATCHING</span>
+          <div class="wcombo" id="wcombo">
+            <div class="wctl" id="wctl">
+              <div class="wface">
+                <div class="wl1">
+                  <span class="wsum" id="wsum" aria-hidden="true"></span>
+                  <input id="wq" class="wq" type="text" role="combobox"
+                         aria-expanded="false" aria-controls="wlist" aria-haspopup="listbox"
+                         aria-autocomplete="list" aria-describedby="wnow"
+                         aria-label="watched project — type to filter"
+                         autocomplete="off" autocorrect="off" spellcheck="false">
+                </div>
+                <div class="wl2">
+                  <span class="wmeta" id="wmeta" aria-hidden="true"></span>
+                  <span class="wkeep" id="wkeep" aria-hidden="true"></span>
+                </div>
+                <div class="wwarn" id="wwarn"></div>
+              </div>
+              <span class="wcue" id="wcue" aria-hidden="true">&#9662;</span>
+            </div>
+            <div class="wlist" id="wlist" role="listbox" aria-label="watched projects"></div>
+            <span class="sr" id="wnow"></span>
+            <span class="sr" id="wsr" aria-live="polite"></span>
+          </div>
+        </div>
+
+        <!-- measured, never seen -->
+        <div class="ghostholder"><div id="ghost" class="pstrip on" inert aria-hidden="true"></div></div>
+      </div>
+
+      <div class="fstats">
+        <div class="fstat"><b id="fs1">8,982</b><span>ARTIFACTS</span></div>
+        <div class="fstat"><b>41</b><span>AGENTS</span></div>
+        <div class="fstat"><b>7</b><span>OPEN</span></div>
+      </div>
+      <div class="fbody"></div>
+      <div class="toast" id="toast"></div>
+      <div class="grip" id="grip" title="drag to resize the viewport"></div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <h2>WHAT TO TRY</h2>
+  <ol>
+    <li>Press <b>4</b>, then <b>&#8596; TO THE EDGE</b> &mdash; the frame parks just wide enough for the strip. Now drag the <b>VIEWPORT</b> slider, or the striped edge of the frame, left. At 1,622px the strip's natural width reaches 80% and the row swaps to the control. The meter is the rule: bar = natural width, red tick = 80% of the frame.</li>
+    <li>Press <b>3</b> / <b>4</b> / <b>6</b> / <b>9</b> / <b>12</b>. Re-measured when the list changes, not only on resize. Nine watched projects need a 3,417px window before the strip fits &mdash; which is the whole reason this control exists. <em>Past your own window the frame is still laid out at full size and merely displayed scaled, so the pixels being compared stay honest.</em></li>
+    <li>Click the chunky control, or <kbd>Tab</kbd> to it. It <em>becomes</em> the field where it stands; the project you are on drops to the line below and stays green.</li>
+    <li>Type <kbd>tdel</kbd>, <kbd>fxo</kbd>, <kbd>bfsports</kbd>, <kbd>pnn</kbd>. Subsequence match over repo name and owner, matched characters lit.</li>
+    <li>Type <kbd>sqlite</kbd> &mdash; nothing watched matches. The pinned <b>&#65291;</b> row picks the query up and carries it into induction.</li>
+    <li><kbd>&darr;</kbd><kbd>&uarr;</kbd> move, <kbd>Home</kbd>/<kbd>End</kbd> jump, <kbd>Enter</kbd> selects, <kbd>Esc</kbd> clears then closes and hands focus back. <kbd>Alt</kbd>+<kbd>&darr;</kbd> reopens.</li>
+    <li>Scroll the open list: <b>&#65291; WATCH ANOTHER</b> is stuck to the bottom edge and is never filtered away.</li>
+    <li>Set <b>URL SAYS</b> to either mismatch. The warning shows inside the closed control, and becomes a repair row pinned to the top of the list &mdash; one <kbd>&darr;</kbd><kbd>Enter</kbd> away.</li>
+  </ol>
+</div>
+
+<script>
+"use strict";
+/* ==================================================================
+   fixtures
+   ================================================================== */
+const MIN=60000, HOUR=3600000, DAY=86400000;
+const iso=ms=>new Date(Date.now()-ms).toISOString();
+
+const POOL=[
+  {slug:'omarchy',   repo:'omacom/omarchy',                              artifacts:8982,  fetched_at:iso(8*MIN),  mining:true},
+  {slug:'tdelight',  repo:'parker-brown-family/terminal-delight',        artifacts:41203, fetched_at:iso(2*MIN)},
+  {slug:'fxo',       repo:'parker-brown-family/fix-everything-observatory', artifacts:1204, fetched_at:iso(31*MIN), seeded:true},
+  {slug:'td',        repo:'parker-nothing-nord/td',                      artifacts:96,    fetched_at:iso(4*HOUR)},
+  {slug:'conclave',  repo:'parker-brown-family/conclave',                artifacts:12871, fetched_at:iso(1*HOUR)},
+  {slug:'leanctx',   repo:'parker-brown-family/lean-ctx',                artifacts:3341,  fetched_at:iso(12*MIN), mining:true},
+  {slug:'scout',     repo:'ryanatvisgo/intelliscout-server-prototype',   artifacts:null,  fetched_at:null},
+  {slug:'apes',      repo:'parker-brown-family/apes',                    artifacts:22940, fetched_at:iso(3*MIN)},
+  {slug:'bfsports',  repo:'BROWN-FAMILY-SPORTS-INC/brown-family-sports', artifacts:588,   fetched_at:iso(2*DAY)},
+  {slug:'mdelight',  repo:'parker-brown-family/markdown-delight',        artifacts:1877,  fetched_at:iso(5*HOUR)},
+  {slug:'goddog',    repo:'parker-nothing-nord/god-dog-comic',           artifacts:null,  fetched_at:null, opening:true, error:'git: repository not found'},
+  {slug:'cdelight',  repo:'parker-brown-family/context-delight',         artifacts:640,   fetched_at:iso(22*MIN), opening:true}
+];
+
+const ST={
+  projects:POOL.slice(0,9),
+  shown:'omarchy',      // the project the server is actually showing
+  want:null,            // the project the URL asked for, when it differs
+  open:false, q:'', ai:0, opts:[], prevFocus:null
+};
+
+/* ==================================================================
+   helpers — lifted from swarm.html so the two render identically
+   ================================================================== */
+const $=s=>document.querySelector(s);
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+const nameOf =r=>{const i=String(r).indexOf('/');return i<0?String(r):r.slice(i+1)};
+const ownerOf=r=>{const i=String(r).indexOf('/');return i<0?'':r.slice(0,i)};
+function nwoHtml(nwo){
+  const i=String(nwo||'').indexOf('/');
+  if(i<0)return esc(String(nwo||'—'));
+  return '<b>'+esc(nwo.slice(i+1))+'</b> <i>'+esc(nwo.slice(0,i))+'</i>';
+}
+function fmtRel(ms){
+  const s=ms/1000; if(s<60)return Math.max(1,Math.round(s))+'s ago';
+  const m=s/60;    if(m<60)return Math.round(m)+'m ago';
+  const h=m/60;    if(h<24)return Math.round(h)+'h ago';
+  return Math.round(h/24)+'d ago';
+}
+function ago(i){const t=Date.parse(i);return isFinite(t)?fmtRel(Date.now()-t):'—'}
+const byslug=s=>ST.projects.find(p=>p.slug===s)||null;
+
+/* Badges are built in ONE place and reused by the strip, the closed face,
+   the keeper line and the list rows. That is what makes requirement 6
+   structural rather than a promise: nothing can render a project without
+   also rendering its status, and every badge box is flex:none beside an
+   ellipsising text box, so the owner truncates and the badge cannot. */
+function statusHtml(p){
+  let s='';
+  if(p.seeded) s+='<span class="dbadge seed">SEED</span>';
+  if(p.mining) s+='<span class="dbadge mining">MINING</span>';
+  if(p.opening&&p.error&&p.artifacts==null) s+='<span class="dbadge fail">MINE FAILED</span>';
+  else if(p.opening)                        s+='<span class="dbadge mining">OPENING</span>';
+  return s;
+}
+/* null artifacts is a project nobody has mined, never an empty one. */
+function countHtml(p){
+  return p.artifacts==null
+    ? '<span class="dbadge unmined">NOT MINED</span>'
+    : '<b>'+p.artifacts.toLocaleString()+'</b> artifacts';
+}
+function metaTail(p){ return p.fetched_at? ' · '+esc(ago(p.fetched_at)) : '' }
+
+/* ==================================================================
+   fuzzy — subsequence, scored, with the matched positions kept so the
+   list can light them. Three haystacks per project: the repo NAME (what
+   people type), the OWNER, and "name owner" so a query may span both.
+   ================================================================== */
+function fuzzy(hay,q){
+  const H=hay.toLowerCase(), Q=q.toLowerCase();
+  let at=0, score=0, run=0; const hits=[];
+  for(let i=0;i<Q.length;i++){
+    const c=Q[i];
+    let f=-1;
+    for(let k=at;k<H.length;k++){ if(H[k]===c){f=k;break} }
+    if(f<0) return null;
+    const prev=f>0?H[f-1]:'';
+    const boundary = f===0 || prev==='-'||prev==='_'||prev==='/'||prev==='.'||prev===' ';
+    score += boundary?14:2;
+    if(f===at&&i>0){ run++; score += 5+run } else run=0;
+    score -= Math.min(f-at,10);
+    hits.push(f); at=f+1;
+  }
+  return {score: score - H.length*0.06, hits};
+}
+function fuzzyProject(p,q){
+  const name=nameOf(p.repo), owner=ownerOf(p.repo);
+  if(!q) return {score:0,nameHits:null,ownerHits:null};
+  let best=null;
+  const a=fuzzy(name,q);
+  if(a) best={score:a.score+34,nameHits:a.hits,ownerHits:null};
+  const b=fuzzy(owner,q);
+  if(b&&(!best||b.score+7>best.score)) best={score:b.score+7,nameHits:null,ownerHits:b.hits};
+  const c=fuzzy(name+' '+owner,q);
+  if(c&&(!best||c.score>best.score)){
+    const n=[],o=[];
+    for(const i of c.hits){ if(i<name.length)n.push(i); else if(i>name.length)o.push(i-name.length-1) }
+    best={score:c.score,nameHits:n,ownerHits:o};
+  }
+  return best;
+}
+function hl(text,hits){
+  if(!hits||!hits.length) return esc(text);
+  const on=new Set(hits); let out='', run='';
+  for(let i=0;i<text.length;i++){
+    if(on.has(i)) run+=text[i];
+    else { if(run){out+='<em>'+esc(run)+'</em>';run=''} out+=esc(text[i]); }
+  }
+  if(run) out+='<em>'+esc(run)+'</em>';
+  return out;
+}
+
+/* ==================================================================
+   the strip (sub-threshold) and its ghost (always)
+   ================================================================== */
+function tabHtml(p){
+  const have=ST.shown, want=ST.want;
+  const bits=[countHtml(p)];
+  if(p.fetched_at) bits.push(esc(ago(p.fetched_at)));
+  return '<button class="ptab'+(p.slug===have?' here':'')+(p.slug===want?' want':'')+'"'
+    +' data-slug="'+esc(p.slug)+'" title="'+esc(p.repo)+(p.slug===have?' — showing now':'')+'">'
+    +'<span class="pn"><span class="pnt">'+nwoHtml(p.repo)+'</span>'+statusHtml(p)+'</span>'
+    +'<span class="pm">'+bits.join(' · ')+'</span></button>';
+}
+function stripHtml(){
+  const mis=mismatch();
+  return '<span class="plabel">WATCHING</span>'
+    +(mis?'<span class="pnote">the URL asked for <b>'+esc(mis.want)+'</b> — showing the active project instead</span>':'')
+    +ST.projects.map(tabHtml).join('')
+    +'<button class="pmore">＋ WATCH ANOTHER</button>';
+}
+function mismatch(){
+  if(!ST.want||ST.want===ST.shown) return null;
+  return {want:ST.want, watched:!!byslug(ST.want)};
+}
+
+/* ==================================================================
+   MEASUREMENT — requirement 1.
+
+   Natural width is the width the strip WANTS, which is not the width it
+   has: #projstrip is overflow-x:auto and its children are flex:none, so on
+   screen it is clipped, and once collapsed it is display:none and measures
+   nothing at all. So the strip is rendered a second time into #ghost, an
+   inert, visibility:hidden, position:absolute, width:max-content copy. An
+   abspos max-content box is sized by its content alone, so its width is
+   independent of the viewport: it is a constant until the LIST changes.
+
+   That constant is what stops the thrash. The frame splits cleanly:
+
+     WRITE  only when the project list changed (ghost.innerHTML), and only
+            then is one forced synchronous layout paid, once per change.
+     READ   ghost.offsetWidth (cached) and host.clientWidth. offsetWidth /
+            clientWidth are untransformed layout pixels, so the demo's
+            transform:scale on the stage cannot lie to the measurement.
+     WRITE  a class, and only if the verdict actually flipped.
+
+   A resize therefore costs one integer read and zero DOM writes, and
+   ResizeObserver ticks coalesce into a single rAF.
+   ================================================================== */
+const COLLAPSE=0.80;   // the owner's rule, exactly
+const RESTORE =0.76;   // 4-point deadband, so a drag parked on the line
+                       // does not flap the whole row on and off
+const M={natural:0, dirty:true, queued:false, collapsed:false, host:0};
+
+function scheduleMeasure(listChanged){
+  if(listChanged) M.dirty=true;
+  if(M.queued) return;
+  M.queued=true;
+  requestAnimationFrame(()=>{ M.queued=false; measure(); });
+}
+function measure(){
+  const host=$('#host'), ghost=$('#ghost');
+  if(M.dirty){ ghost.innerHTML=stripHtml(); M.dirty=false; M.natural=0 }   // WRITE
+  if(!M.natural) M.natural=ghost.offsetWidth;                              // READ (forced once per list change)
+  const w=host.clientWidth;                                                // READ
+  M.host=w;
+  const ratio=w>0?M.natural/w:0;
+  const collapsed = M.collapsed ? ratio>RESTORE : ratio>=COLLAPSE;
+  const solo=ST.projects.length<2;   // one project is not a choice — same as today
+  if(collapsed!==M.collapsed){                                             // WRITE, only on a flip
+    M.collapsed=collapsed;
+    if(!collapsed) close(false);
+  }
+  host.classList.toggle('collapsed',collapsed&&!solo);
+  host.classList.toggle('solo',solo);
+  readout(ratio,collapsed,solo);
+}
+function readout(ratio,collapsed,solo){
+  const lim=Math.round(M.host*COLLAPSE);
+  $('#mfill').style.width=Math.min(100,ratio*100).toFixed(1)+'%';
+  $('#mfill').classList.toggle('over',ratio>=COLLAPSE);
+  $('#mnums').innerHTML=
+    'NATURAL <b>'+M.natural.toLocaleString()+'px</b> · THRESHOLD <b>'+lim.toLocaleString()+'px</b>'
+    +' (80% OF '+M.host.toLocaleString()+'px) · <b>'+Math.round(ratio*100)+'%</b> · '
+    +'<span class="v'+(collapsed?' coll':'')+'">'
+    +(solo?'ONE PROJECT — NO ROW':collapsed?'COLLAPSED — COMBOBOX':'TAB STRIP')+'</span>';
+}
+
+/* ==================================================================
+   render
+   ================================================================== */
+function renderStrip(){
+  const el=$('#projstrip');
+  el.innerHTML=stripHtml();
+  for(const b of el.querySelectorAll('.ptab'))
+    b.onclick=()=>{ if(b.dataset.slug!==ST.shown) switchTo(b.dataset.slug) };
+  el.querySelector('.pmore').onclick=()=>watchAnother('');
+}
+
+/* The closed face: repo name, owner, artifact count, relative time, badge.
+   Not "3 projects". */
+function renderClosed(){
+  const p=byslug(ST.shown)||ST.projects[0];
+  const mis=mismatch();
+  $('#wsum').innerHTML='<span class="wsumt">'+nwoHtml(p.repo)+'</span>'+statusHtml(p);
+  $('#wmeta').innerHTML='<span class="wmetat">'+countHtml(p)+metaTail(p)+'</span>';
+  /* the keeper line: while the face is an input, the project you are on is
+     still in the box, one line down, still green. */
+  $('#wkeep').innerHTML='<span class="k">SHOWING</span>'
+    +'<span class="wkeept"><b>'+esc(nameOf(p.repo))+'</b> · '+countHtml(p)+metaTail(p)+'</span>'
+    +statusHtml(p);
+  $('#wwarn').innerHTML= mis
+    ? '⚠ the URL asked for <b>'+esc(mis.want)+'</b> — showing <b>'+esc(nameOf(p.repo))+'</b>, the active project'
+    : '';
+  $('#wcombo').classList.toggle('mismatch',!!mis);
+  $('#wnow').textContent='showing '+nameOf(p.repo)+', owner '+ownerOf(p.repo)+', '
+    +(p.artifacts==null?'not mined':p.artifacts.toLocaleString()+' artifacts')
+    +(p.fetched_at?', '+ago(p.fetched_at):'')
+    +(mis?'. Warning: the URL asked for '+mis.want+'.':'');
+  $('#fs1').textContent = p.artifacts==null ? '—' : p.artifacts.toLocaleString();
+  if(!ST.open) $('#wcue').textContent='▾';
+}
+
+/* options = [repair?] + [matches] + [watch another]. The two pinned rows
+   are built outside the filter, so no query can remove them. */
+function buildOpts(){
+  const q=ST.q.trim(), out=[], mis=mismatch();
+  if(mis) out.push({kind:'repair',mis});
+  const scored=[];
+  for(const p of ST.projects){
+    const f=fuzzyProject(p,q);
+    if(f) scored.push({kind:'proj',p,score:f.score,nameHits:f.nameHits,ownerHits:f.ownerHits});
+  }
+  scored.sort((a,b)=>b.score-a.score);   // stable: an empty query keeps watch order
+  for(const s of scored) out.push(s);
+  out.push({kind:'more',q,none:scored.length===0});
+  ST.opts=out;
+  return scored.length;
+}
+function optHtml(o,i){
+  const id='wopt-'+i, cur=i===ST.ai?' cur':'';
+  if(o.kind==='repair'){
+    const m=o.mis;
+    const label=m.watched
+      ? '↳ OPEN <b>'+esc(nameOf(byslug(m.want).repo))+'</b> — THE URL ASKED FOR IT'
+      : '↳ REPAIR THE LINK — POINT IT AT <b>'+esc(nameOf((byslug(ST.shown)||ST.projects[0]).repo))+'</b>';
+    const sub=m.watched
+      ? 'the URL says <b>'+esc(m.want)+'</b>, the server is showing something else'
+      : '<b>'+esc(m.want)+'</b> is unknown or stale — nothing watches it';
+    return '<div class="wrow pin repair'+cur+'" role="option" id="'+id+'" data-i="'+i+'"'
+      +' aria-selected="'+(i===ST.ai)+'">'
+      +'<span class="wn"><span class="wnt">'+label+'</span></span>'
+      +'<span class="wm"><span class="wmt">'+sub+'</span></span></div>';
+  }
+  if(o.kind==='more'){
+    /* the dead end that is not one: with no match, the typed query is the
+       only thing worth keeping, so it rides into induction. */
+    const sub=o.none&&o.q
+      ? 'look for <u>'+esc(o.q)+'</u> on this machine'
+      : 'induct any repository on this machine';
+    return '<div class="wrow pin more'+cur+'" role="option" id="'+id+'" data-i="'+i+'"'
+      +' aria-selected="'+(i===ST.ai)+'">'
+      +'<span class="wn"><span class="wnt">＋ WATCH ANOTHER'
+      +(o.none&&o.q?' — <b>'+esc(o.q)+'</b>':'')+'</span></span>'
+      +'<span class="wm"><span class="wmt">'+sub+'</span></span></div>';
+  }
+  const p=o.p, here=p.slug===ST.shown;
+  const name=nameOf(p.repo), owner=ownerOf(p.repo);
+  return '<div class="wrow'+(here?' here':'')+cur+'" role="option" id="'+id+'" data-i="'+i+'"'
+    +' aria-selected="'+(i===ST.ai)+'"'+(here?' aria-current="true"':'')+'>'
+    +'<span class="wn"><span class="wnt"><b>'+hl(name,o.nameHits)+'</b> <i>'+hl(owner,o.ownerHits)+'</i></span>'
+    +statusHtml(p)+(here?'<span class="dbadge watched">SHOWING</span>':'')+'</span>'
+    +'<span class="wm"><span class="wmt">'+countHtml(p)+metaTail(p)+'</span></span></div>';
+}
+function renderList(){
+  const n=buildOpts();
+  if(ST.ai>=ST.opts.length) ST.ai=ST.opts.length-1;
+  if(ST.ai<0) ST.ai=0;
+  const list=$('#wlist');
+  let html=ST.opts.map(optHtml).join('');
+  if(n===0&&ST.q.trim()) html=html.replace('<div class="wrow pin more',
+    '<div class="wempty">nothing watched matches <b>'+esc(ST.q.trim())+'</b></div><div class="wrow pin more');
+  list.innerHTML=html;
+  $('#wq').setAttribute('aria-activedescendant','wopt-'+ST.ai);
+  const cue=$('#wcue');
+  cue.textContent=n+'/'+ST.projects.length;
+  cue.classList.toggle('none',n===0);
+  scrollActiveIntoView();
+}
+function scrollActiveIntoView(){
+  const list=$('#wlist'), el=list.querySelector('.wrow.cur');
+  if(!el) return;
+  const top=el.offsetTop-list.clientTop, bot=top+el.offsetHeight;
+  if(top<list.scrollTop) list.scrollTop=top-3;
+  else if(bot>list.scrollTop+list.clientHeight) list.scrollTop=bot-list.clientHeight+3;
+}
+function setActive(i){
+  const n=ST.opts.length; if(!n)return;
+  ST.ai=((i%n)+n)%n;
+  const list=$('#wlist');
+  for(const r of list.querySelectorAll('.wrow')){
+    const on=+r.dataset.i===ST.ai;
+    r.classList.toggle('cur',on);
+    r.setAttribute('aria-selected',String(on));
+  }
+  $('#wq').setAttribute('aria-activedescendant','wopt-'+ST.ai);
+  scrollActiveIntoView();
+}
+
+/* ==================================================================
+   open / close — focus IS open, so there is no second click and no
+   focus hand-off to get wrong. The input is always the one tab stop.
+   ================================================================== */
+const q=()=>$('#wq');
+/* preserve=true when the reopen was caused by a keystroke — the character
+   that reopened the control must not be the character it swallows. */
+function open(preserve){
+  if(ST.open) return;
+  ST.open=true;
+  $('#wcombo').classList.add('open');
+  q().setAttribute('aria-expanded','true');
+  if(preserve){ ST.q=q().value } else { q().value=''; ST.q='' }
+  ST.ai=0;
+  renderList();
+  /* with no query the active option is the project you are already on, so
+     a stray Enter re-selects what is already showing and changes nothing */
+  if(!ST.q){
+    const i=ST.opts.findIndex(o=>o.kind==='proj'&&o.p.slug===ST.shown);
+    if(i>=0) setActive(i);
+  }
+  announce();
+}
+function close(returnFocus){
+  if(ST.open){
+    ST.open=false; ST.q=''; q().value='';
+    $('#wcombo').classList.remove('open');
+    q().setAttribute('aria-expanded','false');
+    q().removeAttribute('aria-activedescendant');
+    $('#wcue').textContent='▾';
+    $('#wcue').classList.remove('none');
+  }
+  if(returnFocus){
+    const prev=ST.prevFocus;
+    if(prev&&prev!==q()&&document.contains(prev)&&prev.focus) prev.focus();
+    else q().blur();
+  }
+}
+function announce(){
+  const n=ST.opts.filter(o=>o.kind==='proj').length;
+  $('#wsr').textContent=ST.q.trim()
+    ? n+' of '+ST.projects.length+' projects match '+ST.q.trim()
+    : ST.projects.length+' watched projects';
+}
+
+/* ==================================================================
+   actions
+   ================================================================== */
+function switchTo(slug){
+  ST.shown=slug;
+  if(ST.want===slug) ST.want=null, $('#wmis').value='none';
+  renderClosed(); renderStrip(); scheduleMeasure(true);
+  toast('now showing <b>'+esc(nameOf(byslug(slug).repo))+'</b>');
+}
+function watchAnother(seed){
+  toast('the observatory directory would open'+(seed?' with <b>'+esc(seed)+'</b> in its search':''));
+}
+function repair(){
+  const mis=mismatch(); if(!mis) return;
+  if(mis.watched){ switchTo(mis.want); return }
+  ST.want=null; $('#wmis').value='none';
+  renderClosed(); renderStrip(); scheduleMeasure(true);
+  toast('the link now points at <b>'+esc(nameOf((byslug(ST.shown)||ST.projects[0]).repo))+'</b>');
+}
+function choose(o){
+  if(!o) return;
+  if(o.kind==='proj'){ if(o.p.slug!==ST.shown) switchTo(o.p.slug); close(false); q().focus(); return }
+  if(o.kind==='more'){ watchAnother(o.none?o.q.trim():''); close(false); q().focus(); return }
+  if(o.kind==='repair'){ repair(); close(false); q().focus(); }
+}
+let toastT=0;
+function toast(html){
+  const t=$('#toast'); t.innerHTML=html; t.classList.add('on');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),2200);
+}
+
+/* ==================================================================
+   wiring
+   ================================================================== */
+$('#wctl').addEventListener('mousedown',e=>{
+  if(e.target!==q()){ e.preventDefault(); q().focus(); }
+});
+/* covers the click that lands on the input itself, and the click that
+   reopens a control which is closed but still focused after Escape */
+$('#wctl').addEventListener('click',()=>{ if(!ST.open) open(false) });
+q().addEventListener('focus',e=>{ ST.prevFocus=e.relatedTarget||ST.prevFocus; $('#wcombo').classList.add('focus'); open(false); });
+q().addEventListener('blur',()=>{ $('#wcombo').classList.remove('focus'); close(false) });
+q().addEventListener('input',()=>{
+  if(!ST.open){ open(true); return }
+  ST.q=q().value; ST.ai=0; renderList(); announce();
+});
+q().addEventListener('keydown',e=>{
+  const k=e.key;
+  if(k==='ArrowDown'){
+    e.preventDefault(); if(!ST.open){open(false);return} setActive(ST.ai+1); return;
+  }
+  if(k==='ArrowUp'){ e.preventDefault(); if(!ST.open){open(false);setActive(ST.opts.length-1);return} setActive(ST.ai-1); return }
+  if(k==='Home'&&ST.open){ e.preventDefault(); setActive(0); return }
+  if(k==='End'&&ST.open){ e.preventDefault(); setActive(ST.opts.length-1); return }
+  if(k==='PageDown'&&ST.open){ e.preventDefault(); setActive(Math.min(ST.opts.length-1,ST.ai+5)); return }
+  if(k==='PageUp'&&ST.open){ e.preventDefault(); setActive(Math.max(0,ST.ai-5)); return }
+  if(k==='Enter'){ if(ST.open){ e.preventDefault(); choose(ST.opts[ST.ai]) } return }
+  if(k==='Escape'){
+    e.preventDefault();
+    /* first Escape drops the query and leaves the list up; second one
+       restores the summary and hands focus back where it came from. */
+    if(ST.open&&ST.q){ q().value=''; ST.q=''; ST.ai=0; renderList(); announce(); return }
+    close(true); return;
+  }
+  if(k==='Tab'){ close(false) }
+});
+/* mousedown on the list is swallowed so focus never leaves the input —
+   there is no focus to restore because none was ever lost. */
+$('#wlist').addEventListener('mousedown',e=>e.preventDefault());
+$('#wlist').addEventListener('click',e=>{
+  const r=e.target.closest('.wrow'); if(!r) return;
+  setActive(+r.dataset.i); choose(ST.opts[ST.ai]);
+});
+$('#wlist').addEventListener('mouseover',e=>{
+  const r=e.target.closest('.wrow'); if(r&&+r.dataset.i!==ST.ai) setActive(+r.dataset.i);
+});
+
+/* ---- rig ---- */
+function setProjects(n){
+  ST.projects=POOL.slice(0,n);
+  if(!byslug(ST.shown)) ST.shown=ST.projects[0].slug;
+  for(const b of document.querySelectorAll('.rig button[data-n]')) b.classList.toggle('on',+b.dataset.n===n);
+  renderClosed(); renderStrip(); renderListIfOpen();
+  scheduleMeasure(true);          // the list changed — re-measure, not just on resize
+}
+function renderListIfOpen(){ if(ST.open) renderList() }
+for(const b of document.querySelectorAll('.rig button[data-n]')) b.onclick=()=>setProjects(+b.dataset.n);
+/* Park the viewport just wide enough for the strip, whatever the watch
+   count is. It targets the RESTORE edge, not the COLLAPSE one: aiming at
+   0.80 from a collapsed state lands inside the deadband and nothing moves,
+   which is the deadband doing its job and looks like a broken button. */
+$('#wedge').onclick=()=>{ if(M.natural) setStageW(Math.ceil(M.natural/RESTORE)+14) };
+
+$('#wmis').onchange=e=>{
+  const v=e.target.value;
+  ST.want = v==='none' ? null : v==='watched' ? 'tdelight' : 'tdel-old-2024';
+  if(ST.want===ST.shown) ST.shown = ST.projects[0].slug==='tdelight'?'omarchy':ST.projects[0].slug;
+  renderClosed(); renderStrip(); renderListIfOpen();
+  scheduleMeasure(true);
+};
+
+let stageW=1280;
+function setStageW(w){
+  stageW=Math.max(480,Math.min(3600,Math.round(w)));
+  $('#stage').style.width=stageW+'px';
+  $('#wslider').value=stageW;
+  $('#wnum').textContent=stageW+'px';
+  fit();
+}
+/* the stage is laid out at its real CSS width and merely DISPLAYED scaled,
+   so widths past the window are still measurable in honest pixels. */
+function fit(){
+  const avail=$('#holder').clientWidth;
+  const s=Math.min(1,avail/stageW);
+  $('#scaler').style.transform='scale('+s.toFixed(4)+')';
+  $('#holder').style.height=Math.ceil(562*s)+'px';
+}
+$('#wslider').oninput=e=>setStageW(+e.target.value);
+(function(){
+  const g=$('#grip'); let sx=0,sw=0,sc=1;
+  g.addEventListener('pointerdown',e=>{
+    g.setPointerCapture(e.pointerId); sx=e.clientX; sw=stageW;
+    sc=Math.min(1,$('#holder').clientWidth/stageW); e.preventDefault();
+  });
+  g.addEventListener('pointermove',e=>{
+    if(!g.hasPointerCapture(e.pointerId))return;
+    setStageW(sw+(e.clientX-sx)/sc);
+  });
+  g.addEventListener('pointerup',e=>g.releasePointerCapture(e.pointerId));
+})();
+
+/* re-evaluate on resize (the stage's own box, not window.innerWidth — the
+   row is what has to fit, and in swarm.html it spans the viewport anyway) */
+new ResizeObserver(()=>scheduleMeasure(false)).observe($('#host'));
+window.addEventListener('resize',fit);
+/* metrics measured in the fallback font are not the metrics that ship */
+if(document.fonts&&document.fonts.ready) document.fonts.ready.then(()=>scheduleMeasure(true));
+
+renderClosed(); renderStrip(); setStageW(1280); scheduleMeasure(true);
+</script>
+</body>
+</html>

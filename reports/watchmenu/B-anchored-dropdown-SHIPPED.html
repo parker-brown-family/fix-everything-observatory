@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>watch menu — direction B, the anchored dropdown</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500;700&display=swap">
+<style>
+  :root{
+    --bg:#1a1b26; --bg2:#16161e; --panel:#1f2335; --line:#2a2f44;
+    --dim:#414868; --ghost:#565f89; --fg:#c0caf5; --blue:#7aa2f7;
+    --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --yellow:#e0af68;
+    --violet:#bb9af7; --white:#ffffff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{color-scheme:dark}
+  body{
+    background:var(--bg); color:var(--blue);
+    font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:300;
+    min-height:100vh; padding:22px 24px 60px;
+  }
+  button{
+    font:inherit;font-size:10.5px;letter-spacing:.08em;padding:6px 11px;cursor:pointer;
+    background:transparent;color:var(--cyan);border:1px solid var(--dim);white-space:nowrap;
+  }
+  button:hover{border-color:var(--cyan)}
+
+  /* ==================================================================
+     THE COMPONENT — everything from here to the END OF COMPONENT mark
+     is what gets pasted into swarm.html. The demo harness below it is
+     scaffolding and does not travel.
+     ================================================================== */
+
+  /* ---- mode: strip. Verbatim from swarm.html. Below the threshold the
+     strip is not "a version of" today's strip, it IS today's strip. ---- */
+  .wmstrip{display:flex;align-items:stretch;gap:7px;background:var(--bg2);flex:none}
+  .wmstrip.on{padding:8px 14px}
+  .plabel{align-self:center;flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);margin-right:5px}
+  .ptab{
+    flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+    padding:7px 14px 8px;max-width:340px;
+  }
+  .ptab:hover{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .ptab.here{border-left-color:var(--green);background:var(--line)}
+  .ptab.want{border-left-color:var(--cyan)}
+  .ptab .pn{display:flex;align-items:baseline;gap:6px;font-size:13px}
+  .ptab .pn .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .ptab .pn .dbadge{flex:none;margin-left:0}
+  .ptab .pn b{color:var(--white);font-weight:700}
+  .ptab .pn i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .ptab.here .pn b{color:var(--green)}
+  .ptab .pm{display:block;font-size:9.5px;color:var(--ghost);margin-top:2.5px;white-space:nowrap}
+  .ptab .pm b{color:var(--blue);font-weight:500}
+  .pmore{flex:none;align-self:center;font-size:10px;letter-spacing:.1em;border-style:dashed;padding:8px 12px}
+  .pnote{align-self:center;flex:none;font-size:9.5px;color:var(--yellow);max-width:300px;white-space:normal;line-height:1.4}
+  .pnote b{color:var(--fg);font-weight:500}
+
+  .dbadge{
+    display:inline-block;font-size:8px;letter-spacing:.1em;padding:1px 5px 2px;margin-left:6px;
+    border:1px solid var(--dim);color:var(--ghost);vertical-align:1px;
+  }
+  .dbadge.seed{border-color:var(--yellow);color:var(--yellow)}
+  .dbadge.mining{border-color:var(--cyan);color:var(--cyan)}
+  .dbadge.fail{border-color:var(--red);color:var(--red)}
+  .dbadge.asked{border-color:var(--yellow);color:var(--yellow)}
+  .dbadge.unmined{
+    border-color:var(--dim);color:var(--ghost);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.45) 3px 6px);
+  }
+
+  /* ---- the host row. One element, two renderings, one data source. ---- */
+  .wmhost{
+    background:var(--bg2);border-bottom:1px solid var(--line);
+    display:flex;align-items:stretch;
+  }
+  /* A scroll container CLIPS its absolutely positioned descendants, so the
+     anchored panel would be guillotined by the strip's own overflow-x:auto.
+     The overflow only exists to let the strip scroll; in menu mode there is
+     no strip, so the host stops being a scroller. */
+  .wmhost.mode-strip{overflow-x:auto}
+  .wmhost.mode-menu{overflow:visible}
+  .wmhost.mode-strip .wmmenu{display:none}
+  .wmhost.mode-menu  .wmstrip{display:none}
+
+  .wmmenu{display:flex;align-items:center;gap:10px;padding:9px 14px;min-width:0;flex:1}
+  .wmwrap{position:relative;flex:1;min-width:0;max-width:520px}
+
+  /* ---- closed state: chunky, and it says which project, not how many ---- */
+  .wmbar{
+    display:block;width:100%;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    padding:8px 12px 9px;letter-spacing:normal;
+  }
+  .wmbar:hover{border-color:var(--cyan);border-left-color:var(--green)}
+  .wmbar:focus-visible{outline:none;border-color:var(--cyan);border-left-color:var(--green)}
+  .wmhost.open .wmbar{border-color:var(--cyan);border-bottom-color:transparent;background:var(--line)}
+  .wmhost.open.flip .wmbar{border-bottom-color:var(--cyan);border-top-color:transparent}
+
+  /* Truncation has a pecking order and the badge is not in it: the owner
+     gives way first (it is the half of the name carrying no information),
+     the repo name second, and the status badge never — it wraps to its own
+     line before it will shorten by one character. */
+  .wmid{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;font-size:14px;min-width:0}
+  .wmnm{display:flex;align-items:baseline;gap:7px;min-width:0;flex:1 1 auto}
+  .wmnm b{color:var(--green);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:2ch}
+  .wmnm i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:2 1 auto;min-width:0}
+  .wmbadges{flex:none;display:flex;gap:0;align-items:baseline}
+  .wmbadges .dbadge:first-child{margin-left:0}
+  .wmcar{flex:none;color:var(--ghost);font-size:10px;margin-left:2px;align-self:center}
+  .wmbar:hover .wmcar,.wmhost.open .wmcar{color:var(--cyan)}
+  .wmmeta{display:block;font-size:9.5px;color:var(--ghost);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wmmeta b{color:var(--blue);font-weight:500}
+  .wmmeta .sep{color:var(--dim)}
+
+  /* the mismatch, on the closed control, where it cannot scroll out of view */
+  .wmwarn{
+    display:block;margin-top:7px;border-left:2px solid var(--yellow);
+    background:rgba(224,175,104,.07);padding:4px 8px 5px;
+    font-size:9.5px;line-height:1.45;color:var(--yellow);white-space:normal;
+  }
+  .wmwarn b{color:var(--fg);font-weight:500}
+
+  .wmcount{flex:none;font-size:9px;letter-spacing:.2em;color:var(--ghost);white-space:nowrap}
+  .wmcount b{color:var(--fg);font-weight:500}
+
+  /* ---- open state: anchored under the control, control-width, and the
+     page behind it neither moves nor dims ---- */
+  .wmpanel{
+    position:absolute;left:0;top:calc(100% - 1px);z-index:30;
+    display:none;flex-direction:column;
+    background:var(--bg);border:1px solid var(--cyan);
+    box-shadow:0 20px 54px rgba(0,0,0,.62);
+  }
+  .wmhost.open .wmpanel{display:flex}
+  .wmpanel.up{top:auto;bottom:calc(100% - 1px);box-shadow:0 -20px 54px rgba(0,0,0,.62)}
+
+  .wmfilter{flex:none;padding:9px 10px;border-bottom:1px solid var(--line);background:var(--bg2);
+    display:flex;align-items:center;gap:9px}
+  .wmq{
+    flex:1;min-width:0;background:var(--bg);border:1px solid var(--dim);color:var(--fg);
+    font:400 12.5px/1.5 'JetBrains Mono',ui-monospace,monospace;padding:7px 10px;
+    letter-spacing:.02em;outline:none;
+  }
+  .wmq:focus{border-color:var(--cyan)}
+  .wmq::placeholder{color:var(--dim)}
+
+  .wmlist{flex:1;min-height:0;display:flex;flex-direction:column}
+  .wmscroll{position:relative;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px}
+  .wmscroll::-webkit-scrollbar{width:9px}
+  .wmscroll::-webkit-scrollbar-track{background:var(--bg2)}
+  .wmscroll::-webkit-scrollbar-thumb{background:var(--dim);border:2px solid var(--bg2)}
+  .wmscroll::-webkit-scrollbar-thumb:hover{background:var(--ghost)}
+
+  .wmopt{
+    display:block;padding:7px 10px 8px;cursor:pointer;
+    border-left:3px solid transparent;border-top:1px solid transparent;border-bottom:1px solid transparent;
+    background:transparent;
+  }
+  .wmopt+.wmopt{margin-top:1px}
+  .wmopt.here{border-left-color:var(--green)}
+  .wmopt.want{border-left-color:var(--cyan)}
+  .wmopt.cur{background:var(--line);border-top-color:var(--dim);border-bottom-color:var(--dim)}
+  .wmopt.cur:not(.here):not(.want){border-left-color:var(--cyan)}
+  .wmopt .oid{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;font-size:12.5px;min-width:0}
+  .wmopt .onm{display:flex;align-items:baseline;gap:7px;min-width:0;flex:1 1 auto}
+  .wmopt .onm b{color:var(--white);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:2ch}
+  .wmopt .onm i{color:var(--ghost);font-style:normal;font-size:9.5px;letter-spacing:.04em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:2 1 auto;min-width:0}
+  .wmopt.here .onm b{color:var(--green)}
+  .wmopt .obadges{flex:none;display:flex;align-items:baseline}
+  .wmopt .obadges .dbadge:first-child{margin-left:0}
+  .wmopt .om{display:block;font-size:9px;color:var(--ghost);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wmopt .om b{color:var(--blue);font-weight:500}
+  .wmopt .om .sep{color:var(--dim)}
+
+  em.hi{font-style:normal;color:var(--cyan);background:rgba(125,207,255,.17)}
+  .wmopt.here em.hi{color:var(--green);background:rgba(158,206,106,.17)}
+
+  .wmnone{padding:16px 12px;font-size:10.5px;color:var(--ghost);line-height:1.6}
+  .wmnone b{color:var(--yellow);font-weight:500}
+
+  /* The floor of the panel, structurally outside the scroller — not
+     position:sticky, which can still be scrolled past mid-momentum. */
+  .wmfoot{flex:none;border-top:1px solid var(--line);background:var(--bg2);padding:5px}
+  .wmmore{
+    display:block;width:100%;text-align:left;font:inherit;font-size:10px;letter-spacing:.1em;
+    color:var(--cyan);cursor:pointer;background:transparent;
+    border:1px dashed var(--dim);border-left-width:3px;border-left-style:solid;border-left-color:transparent;
+    padding:8px 10px 9px;
+  }
+  .wmmore:hover{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .wmmore.cur{background:var(--line);border-color:var(--cyan);border-left-color:var(--cyan);color:var(--white)}
+  .wmmore small{display:block;font-size:8.5px;letter-spacing:.12em;color:var(--ghost);margin-top:3px}
+
+  /* The measurement ghost. Laid out at max-content forever, seen by no one,
+     clipped to a zero box so it cannot lengthen a scrollbar. */
+  #wmghostbox{position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;z-index:-1}
+  #wmghost{position:absolute;left:0;top:0;width:max-content;visibility:hidden}
+
+  /* ==================== END OF COMPONENT ==================== */
+
+  /* ---------------- demo harness ---------------- */
+  h1{font-size:14px;font-weight:700;letter-spacing:.16em;color:var(--white)}
+  h1 small{display:block;font-size:9px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:4px}
+  .lede{max-width:none;margin:14px 0 18px;display:grid;gap:0;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));
+    border:1px solid var(--line)}
+  .lede div{padding:9px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+    font-size:10.5px;line-height:1.6;color:var(--fg)}
+  .lede div:hover{background:var(--bg2)}
+  .lede kbd{font:inherit;font-size:9.5px;letter-spacing:.06em;color:var(--cyan);border:1px solid var(--dim);padding:0 4px 1px}
+  .lede b{color:var(--yellow);font-weight:500}
+  .lede i{font-style:normal;color:var(--ghost)}
+
+  .rig{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px}
+  .rig label{font-size:9px;letter-spacing:.2em;color:var(--ghost);display:block;margin-bottom:5px}
+  input[type=range]{width:340px;accent-color:#7dcfff;background:transparent}
+  .togs{display:flex;gap:16px;flex-wrap:wrap}
+  .tog{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--fg);cursor:pointer;letter-spacing:.04em}
+  .tog input{accent-color:#e0af68}
+
+  /* Nine chunky tabs really are ~2,600px wide, so the frame has to be able to
+     grow past the window for the reader to see the strip at all. That is the
+     finding, not a demo artifact: at any ordinary screen width, nine watched
+     projects is already the dropdown's case. */
+  /* Deliberately NOT a scroll container: overflow:auto here would clip the
+     anchored panel exactly the way #projstrip's own overflow-x would. When the
+     frame outgrows the window the DOCUMENT scrolls, which clips nothing. */
+  .stage{padding-bottom:6px}
+  #frame{
+    position:relative;border:1px solid var(--dim);background:var(--bg);
+    width:1240px;min-width:300px;
+  }
+  .fhead{display:flex;align-items:center;gap:14px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .fmark{width:24px;height:24px;flex:none;border:1px solid var(--dim);background:var(--panel)}
+  .fhead h2{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--white)}
+  .fhead h2 small{display:block;font-size:8px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:2px}
+  .fbody{padding:26px 14px 40px;font-size:10px;color:var(--dim);letter-spacing:.2em}
+  #grip{
+    position:absolute;top:0;right:0;width:13px;height:100%;cursor:ew-resize;z-index:5;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #grip::before{content:"";width:3px;height:56px;background:var(--dim)}
+  #grip:hover::before,#grip.on::before{background:var(--cyan)}
+
+  .readout{margin-top:16px;border:1px solid var(--line);max-width:820px}
+  .rrow{display:flex;gap:0;border-bottom:1px solid var(--line)}
+  .rcell{padding:7px 12px 8px;border-right:1px solid var(--line);flex:1}
+  .rcell:last-child{border-right:none}
+  .rcell label{display:block;font-size:8.5px;letter-spacing:.18em;color:var(--ghost);margin-bottom:3px}
+  .rcell b{font-size:15px;font-weight:700;color:var(--fg);font-variant-numeric:tabular-nums}
+  #roMode{font-size:11px;letter-spacing:.16em}
+  #roMode.menu{color:var(--yellow)} #roMode.strip{color:var(--green)}
+  .gauge{position:relative;height:26px;background:var(--bg2);margin:0}
+  .gfill{position:absolute;left:0;top:0;bottom:0;background:rgba(125,207,255,.22);border-right:2px solid var(--cyan)}
+  .gauge.over .gfill{background:rgba(224,175,104,.22);border-right-color:var(--yellow)}
+  .gtick{position:absolute;top:0;bottom:0;width:1px;background:var(--yellow)}
+  .gtick::after{content:"80%";position:absolute;top:5px;left:4px;font-size:8px;letter-spacing:.16em;color:var(--yellow)}
+  .glab{position:absolute;left:8px;top:8px;font-size:8.5px;letter-spacing:.16em;color:var(--ghost)}
+  .toast{margin-top:12px;font-size:10.5px;color:var(--violet);letter-spacing:.04em;min-height:16px}
+</style>
+</head>
+<body>
+
+<h1>WATCHED PROJECTS — DIRECTION B<small>THE ANCHORED DROPDOWN</small></h1>
+
+<div class="lede">
+  <div>Drag the slider <b>right</b> past ~3,330px and the tab strip comes back; drag <b>left</b> and watch it collapse the instant its natural width reaches <b>80% of the frame</b>. The frame's right edge drags too.</div>
+  <div>Nine chunky tabs genuinely measure ~2,660px, so at any ordinary screen width nine watched projects is <i>already</i> the dropdown's case. That is the finding the rule encodes, not a rigged demo.</div>
+  <div><kbd>ADD</kbd> / <kbd>DROP</kbd> a project. The threshold re-evaluates on the <i>list</i>, not only on resize — a tenth project can collapse a row nobody resized.</div>
+  <div>Click the bar, or focus it and press <kbd>Enter</kbd> <kbd>Space</kbd> <kbd>↓</kbd>. The bar does not move, nothing dims, the panel arrives attached to it.</div>
+  <div>Type <kbd>tdel</kbd> <kbd>fxo</kbd> <kbd>bfs</kbd> <kbd>nord</kbd> <kbd>omtdt</kbd> — subsequence over <i>name and owner</i>, matched characters lit.</div>
+  <div><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>PgUp</kbd><kbd>PgDn</kbd> by five · <kbd>Home</kbd><kbd>End</kbd> to the ends <i>(with the filter empty — otherwise they belong to the caret, as they should)</i> · <kbd>Enter</kbd> selects · <kbd>Esc</kbd> closes and returns focus to the bar.</div>
+  <div>Scroll the list to its end: <b>＋ WATCH ANOTHER</b> is the panel's floor, outside the scroller. No filter removes it and no scroll hides it.</div>
+  <div>Narrow the frame under <b>380px</b> and open it. The panel stops at the frame's edge instead of running off it, and flips up when the floor is closer than the ceiling.</div>
+  <div>Flip <b>URL MISMATCH</b>: the warning rides the closed bar <i>and</i> marks the asked-for row cyan, so the warning has a fix attached. In strip mode it also widens the strip by ~390px — enough, on its own, to trip the threshold.</div>
+</div>
+
+<div class="rig">
+  <div>
+    <label>FRAME WIDTH — STANDS IN FOR THE VIEWPORT</label>
+    <input id="fw" type="range" min="320" max="3800" value="1240">
+  </div>
+  <div class="togs">
+    <label class="tog"><input type="checkbox" id="tMis"> URL MISMATCH</label>
+    <label class="tog"><input type="checkbox" id="tFail"> THAT FIRST MINE FAILED</label>
+  </div>
+  <div style="display:flex;gap:7px">
+    <button id="bAdd">＋ ADD A PROJECT</button>
+    <button id="bDrop">− DROP ONE</button>
+  </div>
+</div>
+
+<div class="stage"><div id="frame">
+  <div class="fhead">
+    <div class="fmark"></div>
+    <h2>WE CAN FIX EVERYTHING<small>THE SWARM</small></h2>
+  </div>
+
+  <!-- the component's one mount point -->
+  <div id="wmhost" class="wmhost mode-strip"></div>
+
+  <div class="fbody">— THE SWARM CANVAS —</div>
+  <div id="grip"></div>
+</div></div>
+
+<div class="readout">
+  <div class="rrow">
+    <div class="rcell"><label>NATURAL STRIP WIDTH</label><b id="roNat">—</b></div>
+    <div class="rcell"><label>THRESHOLD — 80% OF FRAME</label><b id="roThr">—</b></div>
+    <div class="rcell"><label>FRAME</label><b id="roVw">—</b></div>
+    <div class="rcell"><label>MODE</label><b id="roMode">—</b></div>
+  </div>
+  <div class="gauge" id="gauge">
+    <div class="gfill" id="gFill"></div>
+    <div class="gtick" id="gTick"></div>
+    <div class="glab">NATURAL WIDTH AGAINST THE FRAME</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div id="wmghostbox" aria-hidden="true"><div id="wmghost" class="wmstrip on"></div></div>
+
+<script>
+/* =====================================================================
+   THE COMPONENT. Vanilla, no build, no dependency. Paste-ready.
+   ===================================================================== */
+
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fmtRel(ms){
+  const s=Math.max(0,ms/1000);
+  if(s<60)return Math.round(s)+'s ago';
+  const m=s/60; if(m<60)return Math.round(m)+'m ago';
+  const h=m/60; if(h<24)return Math.round(h)+'h ago';
+  return Math.round(h/24)+'d ago';
+}
+function ago(t){return isFinite(t)?fmtRel(Date.now()-t):'—'}
+
+/* ---------------------------------------------------------------------
+   FUZZY: subsequence, not substring. "tdel" has to find terminal-delight.
+
+   Two passes, fzf's shape. Forward finds the earliest feasible end of a
+   match; backward from that end pulls every matched index as LATE as it
+   can go without breaking order, which collapses the match onto its
+   tightest window — so "omtdt" lands on the word heads of
+   omarchy-terminal-delight-theme rather than smearing across the string.
+   Then the window is scored: heads of words count, runs count, a match
+   that starts late counts for less.
+   --------------------------------------------------------------------- */
+const BOUND=/[\s\-_/.:@]/;
+function fzf(hay,needle){
+  const h=hay.toLowerCase(), n=needle.toLowerCase();
+  if(!n)return {score:0,pos:[]};
+  let i=0,j=0;
+  while(i<h.length&&j<n.length){ if(h[i]===n[j])j++; i++ }
+  if(j<n.length)return null;                       // not a subsequence at all
+  const pos=new Array(n.length);
+  let k=n.length-1,p=i-1;
+  while(p>=0&&k>=0){ if(h[p]===n[k]){pos[k]=p;k--} p-- }
+  let s=0,prev=-2;
+  for(let m=0;m<pos.length;m++){
+    const at=pos[m]; s+=1;
+    if(at===0)s+=22;
+    else if(BOUND.test(h[at-1]))s+=15;
+    else if(hay[at-1]>='a'&&hay[at-1]<='z'&&hay[at]>='A'&&hay[at]<='Z')s+=11;
+    if(at===prev+1)s+=9;
+    prev=at;
+  }
+  s-=pos[0]*0.7;                                             // a late start is a weaker match
+  s-=(pos[pos.length-1]-pos[0]-pos.length+1)*0.45;           // and a scattered one weaker still
+  s-=h.length*0.045;                                         // ties break toward the shorter name
+  /* Typing a whole short name must beat matching it as a subsequence of a
+     long one, or the repo literally called "td" loses to terminal-delight
+     under its own name. A head-anchored unbroken run is worth more than any
+     amount of scattered boundary luck; typing the entire string, more still. */
+  if(pos[0]===0&&pos[pos.length-1]===pos.length-1){
+    s+=16;
+    if(pos.length===h.length)s+=24;
+  }
+  return {score:s,pos};
+}
+/* The haystack is built in RENDER ORDER — name, then owner — so one set of
+   match positions maps straight onto the two rendered spans, with no second
+   search and no second scoring pass. The joiner is a single space on purpose
+   rather than an unmatchable sentinel: it lets a query cross the boundary the
+   way a person types it ("delight par"), and it keeps the offset arithmetic
+   below to exactly one character. */
+const JOIN=' ';
+function rank(p,q){
+  if(!q)return {score:0,pos:[]};
+  const a=fzf(p.name,q), b=fzf(p.name+JOIN+p.owner,q);
+  if(!a&&!b)return null;
+  if(a&&(!b||a.score+9>=b.score))return {score:a.score+9,pos:a.pos};   // the name is the good half
+  return b;
+}
+function hlSet(pos,from,len){
+  const s=new Set();
+  for(const x of pos) if(x>=from&&x<from+len) s.add(x-from);
+  return s;
+}
+function hl(text,set){
+  let out='',run='',on=false;
+  const flush=()=>{ if(run)out+= on?'<em class="hi">'+esc(run)+'</em>':esc(run); run='' };
+  for(let i=0;i<text.length;i++){
+    const bit=set.has(i);
+    if(bit!==on){flush();on=bit}
+    run+=text[i];
+  }
+  flush(); return out;
+}
+
+/* ---------------------------------------------------------------------
+   STATE. In swarm.html these are DIR.projects, shownSlug() and PROJECT.
+   --------------------------------------------------------------------- */
+const WM={
+  projects:[],      // {slug,name,owner,artifacts|null,at|null,seeded,mining,error}
+  shown:null,       // the slug the instrument is actually rendering
+  want:null,        // the slug the URL asked for — a request, not a fact
+  open:false,
+  q:'',
+  cur:0,            // active index into the currently visible option list
+  view:[],          // [{p,pos}] plus the terminal ＋ pseudo-option
+};
+const HOST=document.getElementById('wmhost');
+const GHOST=document.getElementById('wmghost');
+
+function badgesFor(p){
+  const pending=p.slug===WM.want&&p.slug!==WM.shown;
+  /* OPENING is a claim of progress; when the server has recorded a failed
+     first mine and no manifest exists the claim is false, and MINE FAILED
+     takes the slot rather than sitting beside it. */
+  const failed=pending&&p.error&&p.artifacts==null;
+  let h='';
+  if(p.seeded)h+='<span class="dbadge seed">SEED</span>';
+  if(p.mining)h+='<span class="dbadge mining">MINING</span>';
+  if(failed)h+='<span class="dbadge fail">MINE FAILED</span>';
+  else if(pending)h+='<span class="dbadge mining">OPENING</span>';
+  return h;
+}
+function metaFor(p){
+  /* null artifacts is a project nobody has mined, never an empty one. */
+  const count=p.artifacts==null
+    ?'<span class="dbadge unmined">NOT MINED</span>'
+    :'<b>'+p.artifacts.toLocaleString()+'</b> artifacts';
+  const bits=[count];
+  if(p.at)bits.push(esc(ago(p.at)));
+  return bits.join(' <span class="sep">·</span> ');
+}
+function plainLabel(p){
+  const bits=[p.name,p.owner];
+  bits.push(p.artifacts==null?'not mined':p.artifacts.toLocaleString()+' artifacts');
+  if(p.at)bits.push(ago(p.at));
+  if(p.seeded)bits.push('seed');
+  if(p.mining)bits.push('mining');
+  const pending=p.slug===WM.want&&p.slug!==WM.shown;
+  if(pending)bits.push(p.error&&p.artifacts==null?'mine failed':'opening');
+  if(p.slug===WM.shown)bits.push('showing now');
+  return bits.join(', ');
+}
+const mismatch=()=>WM.want&&WM.shown&&WM.want!==WM.shown;
+
+/* ---- rendering: strip (today's), bar (closed), options (open) -------- */
+function stripHTML(){
+  return '<span class="plabel">WATCHING</span>'
+    +(mismatch()
+      ?'<span class="pnote">the URL asked for <b>'+esc(WM.want)+'</b> — showing the active project instead</span>':'')
+    +WM.projects.map(p=>{
+      return '<button class="ptab'+(p.slug===WM.shown?' here':'')
+        +(p.slug===WM.want&&p.slug!==WM.shown?' want':'')+'" data-slug="'+esc(p.slug)+'">'
+        +'<span class="pn"><span class="pnt"><b>'+esc(p.name)+'</b> <i>'+esc(p.owner)+'</i></span>'
+        +badgesFor(p)+'</span>'
+        +'<span class="pm">'+metaFor(p)+'</span></button>';
+    }).join('')
+    +'<button class="pmore">＋ WATCH ANOTHER</button>';
+}
+
+function barHTML(){
+  const p=WM.projects.find(x=>x.slug===WM.shown)||WM.projects[0];
+  if(!p)return '';
+  return '<button class="wmbar" id="wmtrigger" type="button"'
+    +' aria-haspopup="listbox" aria-expanded="'+(WM.open?'true':'false')+'"'
+    +' aria-controls="wmpanel" aria-label="'+esc('watched project: '+plainLabel(p)+'. change project')+'">'
+    +'<span class="wmid">'
+      +'<span class="wmnm"><b>'+esc(p.name)+'</b> <i>'+esc(p.owner)+'</i></span>'
+      +'<span class="wmbadges">'+badgesFor(p)+'</span>'
+      +'<span class="wmcar" aria-hidden="true">▼</span>'
+    +'</span>'
+    +'<span class="wmmeta">'+metaFor(p)+'</span>'
+    +(mismatch()
+      ?'<span class="wmwarn">the URL asked for <b>'+esc(WM.want)+'</b> — showing the active project instead. pick it below to repair the link.</span>'
+      :'')
+    +'</button>';
+}
+
+function buildView(){
+  const q=WM.q.trim();
+  let rows=[];
+  for(const p of WM.projects){
+    const r=rank(p,q);
+    if(r)rows.push({p,pos:r.pos,score:r.score});
+  }
+  /* Unfiltered, the order is the watched order — spatial memory is worth
+     more than a ranking nobody asked for. Filtered, best match first. */
+  if(q)rows.sort((a,b)=>b.score-a.score||a.p.name.length-b.p.name.length);
+  WM.view=rows;
+}
+
+function optsHTML(){
+  const q=WM.q.trim();
+  let h='<div class="wmscroll" id="wmscroll" role="presentation">';
+  if(!WM.view.length){
+    h+='<div class="wmnone" role="presentation">no watched project matches <b>'+esc(q)+'</b>.<br>'
+      +'the ＋ below is still open to you — induct a repository that is not watched yet.</div>';
+  }
+  for(let i=0;i<WM.view.length;i++){
+    const {p,pos}=WM.view[i];
+    const nameSet=hlSet(pos,0,p.name.length);
+    const ownSet=hlSet(pos,p.name.length+1,p.owner.length);
+    const asked=p.slug===WM.want&&p.slug!==WM.shown;
+    h+='<div class="wmopt'+(p.slug===WM.shown?' here':'')+(asked?' want':'')
+      +(i===WM.cur?' cur':'')+'" role="option" id="wmopt-'+i+'"'
+      +' aria-selected="'+(i===WM.cur?'true':'false')+'"'
+      +(p.slug===WM.shown?' aria-current="true"':'')
+      +' data-i="'+i+'" data-slug="'+esc(p.slug)+'"'
+      +' aria-label="'+esc(plainLabel(p)+(asked?', asked for by the url':''))+'">'
+      +'<span class="oid">'
+        +'<span class="onm"><b>'+hl(p.name,nameSet)+'</b> <i>'+hl(p.owner,ownSet)+'</i></span>'
+        +'<span class="obadges">'+badgesFor(p)
+          +(asked?'<span class="dbadge asked">URL ASKED</span>':'')+'</span>'
+      +'</span>'
+      +'<span class="om">'+metaFor(p)+'</span>'
+      +'</div>';
+  }
+  h+='</div>';
+  /* ＋ is the last stop in the same arrow-key ring as the projects, but it
+     lives outside the scroller so no amount of scrolling and no filter can
+     put it out of reach. Requirement 4 is structural here, not a promise. */
+  h+='<div class="wmfoot" role="presentation">'
+    +'<div class="wmmore'+(WM.cur===WM.view.length?' cur':'')+'" role="option" id="wmopt-more"'
+    +' aria-selected="'+(WM.cur===WM.view.length?'true':'false')+'"'
+    +' aria-label="watch another repository, opens the observatory directory">'
+    +'＋ WATCH ANOTHER<small>INDUCT ANY REPOSITORY ON THIS MACHINE</small></div></div>';
+  return h;
+}
+
+function panelHTML(){
+  const n=WM.projects.length, shown=WM.view.length;
+  return '<div class="wmpanel" id="wmpanel">'
+    +'<div class="wmfilter">'
+      +'<input class="wmq" id="wmq" type="text" role="combobox" autocomplete="off" spellcheck="false"'
+      +' aria-expanded="true" aria-controls="wmlist" aria-autocomplete="list"'
+      +' aria-label="filter watched projects by name or owner"'
+      +' placeholder="filter by name or owner…" value="'+esc(WM.q)+'">'
+      +'<span class="wmcount" id="wmcount">'+(WM.q.trim()
+        ?'<b>'+shown+'</b>/'+n:'<b>'+n+'</b> WATCHED')+'</span>'
+    +'</div>'
+    +'<div class="wmlist" id="wmlist" role="listbox" aria-label="watched projects">'
+      +optsHTML()
+    +'</div>'
+  +'</div>';
+}
+
+function render(){
+  buildView();
+  HOST.innerHTML='<div class="wmstrip on" id="wmstrip">'+stripHTML()+'</div>'
+    +'<div class="wmmenu"><span class="plabel">WATCHING</span>'
+    +'<div class="wmwrap">'+barHTML()+panelHTML()+'</div></div>';
+  /* The ghost carries the same strip markup and nothing else, so the number
+     the threshold is computed from is never a rendering of the mode it
+     decides. */
+  GHOST.innerHTML=stripHTML();
+  wire();
+  if(WM.open)placePanel();
+  remeasure();
+}
+
+/* ---------------------------------------------------------------------
+   THE MEASUREMENT — the whole point of the control.
+
+   NATURAL WIDTH is read off a hidden ghost of the strip that is laid out
+   at width:max-content forever, inside a fixed zero-size clipped box. Three
+   things follow, and all three are the reason it is a ghost and not the
+   live strip:
+
+     - It is the NATURAL width by construction. max-content means the
+       element sizes to its content, so one offsetWidth read is the answer;
+       there is no scrollWidth end-padding ambiguity to correct for and no
+       clone to build and destroy per measurement.
+     - It is a FIXED POINT. Measuring the live strip would mean the mode
+       changes what is measured, which is a feedback loop: collapse, the
+       strip vanishes, the width reads small, expand, repeat. The ghost is
+       identical in both modes, so the threshold needs no hysteresis band
+       and cannot flap on the boundary.
+     - It does NOT THRASH. Reads happen only inside one requestAnimationFrame,
+       after the frame's writes have already been flushed by the browser, so
+       offsetWidth is served from computed layout rather than forcing a
+       synchronous reflow. Bursts of resize ticks coalesce into one frame,
+       and the mode write is guarded by `next===MODE` so a class toggle that
+       changes nothing never runs — which is also what keeps the
+       ResizeObserver from looping.
+
+   And the one that bites in production: every width here is text width, so
+   the first measurement runs in whatever monospace the browser had before
+   JetBrains Mono arrived. The two metrics differ, the strip is near enough to
+   a 2,700px boundary for that to change the verdict, and nothing would ever
+   re-measure — so document.fonts.ready re-runs it once the real face is in.
+   The size of the discrepancy is NOT measured here (this box has no network,
+   so the demo itself renders in the fallback); the seam is real whatever the
+   number turns out to be, and re-measuring costs one frame.
+   --------------------------------------------------------------------- */
+const COLLAPSE_AT=0.80;
+let MODE=null, pending=false;
+
+/* The box the control is measured against and clamped inside. In swarm.html
+   there is no #frame and this is simply the window — the host spans it, so its
+   width IS the viewport width. The demo substitutes its resizable frame, which
+   is what makes both the 80% rule and the edge clamp visible at demo scale. */
+function viewportBox(){
+  const f=document.getElementById('frame');
+  if(f){const r=f.getBoundingClientRect(); return {left:r.left,right:r.right,width:r.width}}
+  return {left:0,right:innerWidth,width:innerWidth};
+}
+function viewportWidth(){ return viewportBox().width }
+
+function remeasure(){
+  if(pending)return; pending=true;
+  requestAnimationFrame(()=>{
+    pending=false;
+    const natural=GHOST.offsetWidth;          // one read
+    const vw=viewportWidth();                 // one read
+    const thresh=vw*COLLAPSE_AT;
+    if(typeof gauge==='function')gauge(natural,thresh,vw);   // demo readout only
+    const next=natural>=thresh?'menu':'strip';
+    if(next===MODE)return;                    // guarded write: no write, no loop
+    MODE=next;
+    HOST.classList.toggle('mode-menu',next==='menu');
+    HOST.classList.toggle('mode-strip',next==='strip');
+    if(next==='strip'&&WM.open)closeMenu(false);
+    const m=document.getElementById('roMode');
+    if(m){m.textContent=next==='menu'?'DROPDOWN':'TAB STRIP';m.className=next}
+  });
+}
+
+/* ---------------------------------------------------------------------
+   ANCHORING — the panel is the width of the control and hangs off it, and
+   is then pulled back inside the viewport rather than allowed to leave it.
+   --------------------------------------------------------------------- */
+function placePanel(){
+  const trig=document.getElementById('wmtrigger');
+  const panel=document.getElementById('wmpanel');
+  if(!trig||!panel)return;
+  const r=trig.getBoundingClientRect();
+  const box=viewportBox();
+  const EDGE=8, vh=innerHeight;
+  const below=vh-r.bottom-EDGE, above=r.top-EDGE;
+  /* Flip up only when the floor is genuinely the tighter side — a panel
+     that flips for a 20px difference reads as a glitch. */
+  const up=below<230&&above>below+40;
+  panel.classList.toggle('up',up);
+  HOST.classList.toggle('flip',up);
+  panel.style.maxHeight=Math.max(150,Math.min(up?above:below,430))+'px';
+
+  /* Control-width, floored so a very narrow header cannot produce a panel too
+     thin to read — then pulled back inside the box, right edge first and left
+     edge last, so the left clamp always wins and the panel can never be pushed
+     out on the side the reader started from. */
+  const w=Math.max(r.width,Math.min(300,box.width-EDGE*2));
+  panel.style.width=w+'px';
+  let dx=0;
+  if(r.left+w>box.right-EDGE)dx=(box.right-EDGE)-(r.left+w);
+  if(r.left+dx<box.left+EDGE)dx=(box.left+EDGE)-r.left;
+  panel.style.transform=dx?'translateX('+dx+'px)':'';
+}
+
+/* ---------------------------------------------------------------------
+   OPEN / CLOSE / KEYBOARD
+   --------------------------------------------------------------------- */
+function openMenu(seed){
+  if(WM.open)return;
+  WM.open=true; WM.q=seed||'';
+  const i=WM.projects.findIndex(p=>p.slug===WM.shown);
+  WM.cur=Math.max(0,i);
+  HOST.classList.add('open');
+  render();
+  const q=document.getElementById('wmq');
+  if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
+  syncActive();
+}
+function closeMenu(refocus){
+  if(!WM.open)return;
+  WM.open=false; WM.q=''; HOST.classList.remove('open','flip');
+  render();
+  if(refocus){const t=document.getElementById('wmtrigger'); if(t)t.focus()}
+}
+function optCount(){return WM.view.length+1}   /* projects + the ＋ floor */
+function syncActive(){
+  const q=document.getElementById('wmq');
+  const id=WM.cur>=WM.view.length?'wmopt-more':'wmopt-'+WM.cur;
+  if(q)q.setAttribute('aria-activedescendant',id);
+  for(const el of document.querySelectorAll('.wmopt,.wmmore')){
+    const on=el.id===id;
+    el.classList.toggle('cur',on);
+    el.setAttribute('aria-selected',on?'true':'false');
+  }
+  const el=document.getElementById(id);
+  /* The ＋ is not in the scroller, so it is never scrolled to — it is
+     always already visible, which is the entire reason it lives there. */
+  if(el&&el.classList.contains('wmopt'))reveal(el);
+}
+/* NOT scrollIntoView. That walks every scrollable ancestor, and the header
+   this control lives in sits inside one — pressing ArrowDown would scroll the
+   PAGE to bring an option into view, which is precisely the "nothing else
+   moves" property the anchored direction is buying. Scroll the one box that
+   owns the overflow, by hand, and leave every ancestor where it was. */
+function reveal(el){
+  const sc=document.getElementById('wmscroll');
+  if(!sc)return;
+  const top=el.offsetTop, bot=top+el.offsetHeight;
+  if(top<sc.scrollTop)sc.scrollTop=top;
+  else if(bot>sc.scrollTop+sc.clientHeight)sc.scrollTop=bot-sc.clientHeight;
+}
+function move(d){
+  const n=optCount();
+  WM.cur=(WM.cur+d%n+n)%n;
+  syncActive();
+}
+function commit(){
+  if(WM.cur>=WM.view.length){ closeMenu(true); onWatchAnother(); return }
+  const p=WM.view[WM.cur].p;
+  /* Order matters and is not obvious: switchTo() re-renders the host, so
+     focusing the trigger before it runs hands focus to an element that is
+     about to be discarded and drops the caret on <body>. Close the state,
+     let every render that is going to happen happen, focus last. */
+  const change=p.slug!==WM.shown;
+  WM.open=false; WM.q=''; HOST.classList.remove('open','flip');
+  if(change)switchTo(p.slug); else render();
+  const t=document.getElementById('wmtrigger'); if(t)t.focus();
+}
+function onFilter(v){
+  WM.q=v;
+  buildView();
+  WM.cur=0;
+  const list=document.getElementById('wmlist');
+  if(list)list.innerHTML=optsHTML();
+  const c=document.getElementById('wmcount');
+  if(c)c.innerHTML=WM.q.trim()
+    ?'<b>'+WM.view.length+'</b>/'+WM.projects.length
+    :'<b>'+WM.projects.length+'</b> WATCHED';
+  wireOptions();
+  syncActive();
+  placePanel();
+}
+
+function wireOptions(){
+  for(const el of document.querySelectorAll('.wmopt')){
+    el.onmousemove=()=>{const i=+el.dataset.i; if(i!==WM.cur){WM.cur=i;syncActive()}};
+    el.onclick=()=>{WM.cur=+el.dataset.i;commit()};
+  }
+  const more=document.querySelector('.wmmore');
+  if(more){
+    more.onmousemove=()=>{if(WM.cur!==WM.view.length){WM.cur=WM.view.length;syncActive()}};
+    more.onclick=()=>{WM.cur=WM.view.length;commit()};
+  }
+}
+
+function wire(){
+  const strip=document.getElementById('wmstrip');
+  if(strip){
+    for(const b of strip.querySelectorAll('.ptab'))
+      b.onclick=()=>{if(b.dataset.slug!==WM.shown)switchTo(b.dataset.slug)};
+    const m=strip.querySelector('.pmore');
+    if(m)m.onclick=onWatchAnother;
+  }
+  const trig=document.getElementById('wmtrigger');
+  if(trig){
+    trig.onclick=()=>{WM.open?closeMenu(true):openMenu('')};
+    trig.onkeydown=e=>{
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Enter'||e.key===' '){
+        e.preventDefault(); openMenu('');
+        if(e.key==='ArrowUp'){WM.cur=optCount()-1;syncActive()}
+        return;
+      }
+      /* Typing on the closed control opens it and keeps the character —
+         a native select does this and losing the first keystroke is the
+         thing people notice. */
+      if(e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+        e.preventDefault(); openMenu(e.key); onFilter(e.key);
+        const q=document.getElementById('wmq');
+        if(q){q.value=e.key;q.setSelectionRange(1,1)}
+      }
+    };
+  }
+  const q=document.getElementById('wmq');
+  if(q){
+    q.oninput=()=>onFilter(q.value);
+    q.onkeydown=e=>{
+      switch(e.key){
+        case 'ArrowDown': e.preventDefault(); move(1); break;
+        case 'ArrowUp':   e.preventDefault(); move(-1); break;
+        case 'PageDown':  e.preventDefault(); WM.cur=Math.min(optCount()-1,WM.cur+5); syncActive(); break;
+        case 'PageUp':    e.preventDefault(); WM.cur=Math.max(0,WM.cur-5); syncActive(); break;
+        case 'Home':      if(!q.value){e.preventDefault(); WM.cur=0; syncActive()} break;
+        case 'End':       if(!q.value){e.preventDefault(); WM.cur=optCount()-1; syncActive()} break;
+        case 'Enter':     e.preventDefault(); commit(); break;
+        case 'Escape':    e.preventDefault(); closeMenu(true); break;
+        case 'Tab':       e.preventDefault(); closeMenu(true); break;
+      }
+    };
+  }
+  wireOptions();
+}
+
+/* Outside-click closes. A pointerdown listener rather than a backdrop,
+   because a backdrop would dim the page — and the whole virtue being
+   bought here is that nothing behind the panel moves or dims. */
+document.addEventListener('pointerdown',e=>{
+  if(!WM.open)return;
+  if(!HOST.contains(e.target))closeMenu(false);
+},true);
+document.addEventListener('focusin',e=>{
+  if(WM.open&&!HOST.contains(e.target))closeMenu(false);
+});
+addEventListener('resize',()=>{remeasure(); if(WM.open)placePanel()});
+addEventListener('scroll',()=>{if(WM.open)placePanel()},true);
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(remeasure);
+
+/* =========================== END OF COMPONENT =========================== */
+
+
+/* --------------------------- demo harness ------------------------------ */
+const MIN=60000, HOUR=60*MIN, DAY=24*HOUR;
+const SEED=[
+  {slug:'omarchy',name:'omarchy',owner:'omacom',artifacts:8982,at:Date.now()-8*MIN,mining:true},
+  {slug:'td',name:'td',owner:'parker-brown-family',artifacts:88,at:Date.now()-6*DAY},
+  {slug:'apes',name:'apes',owner:'parker-nothing-nord',artifacts:null,at:null},
+  {slug:'conclave',name:'conclave',owner:'parker-brown-family',artifacts:612,at:Date.now()-4*MIN,seeded:true},
+  {slug:'lean-ctx',name:'lean-ctx',owner:'parker-brown-family',artifacts:9101,at:Date.now()-70000},
+  {slug:'terminal-delight',name:'terminal-delight',owner:'parker-brown-family',artifacts:3417,at:Date.now()-2*HOUR},
+  {slug:'intelliscout-server',name:'intelliscout-server',owner:'ryanatvisgo',artifacts:5340,at:Date.now()-12*HOUR},
+  {slug:'fix-everything-observatory',name:'fix-everything-observatory',owner:'parker-brown-family',artifacts:1204,at:Date.now()-31*MIN},
+  {slug:'brown-family-sports',name:'brown-family-sports',owner:'BROWN-FAMILY-SPORTS-INC',artifacts:null,at:null},
+];
+const POOL=[
+  {slug:'markdown-delight',name:'markdown-delight',owner:'parker-brown-family',artifacts:1876,at:Date.now()-55*MIN},
+  {slug:'garrison',name:'garrison',owner:'parker-brown-family',artifacts:2210,at:Date.now()-18*MIN,seeded:true},
+  {slug:'hyprland',name:'hyprland',owner:'hyprwm',artifacts:14022,at:Date.now()-40*MIN,mining:true},
+  {slug:'omarchy-terminal-delight-theme',name:'omarchy-terminal-delight-theme',owner:'parker-brown-family',artifacts:241,at:Date.now()-3*DAY},
+  {slug:'context-delight',name:'context-delight',owner:'parker-nothing-nord',artifacts:null,at:null},
+  {slug:'carl-phone-assistant',name:'carl-phone-assistant',owner:'parker-brown-family',artifacts:430,at:Date.now()-9*HOUR},
+];
+WM.projects=SEED.map(p=>Object.assign({},p));
+WM.shown='terminal-delight';
+WM.want=null;
+
+function toast(s){document.getElementById('toast').textContent=s}
+function switchTo(slug){
+  WM.shown=slug;
+  const p=WM.projects.find(x=>x.slug===slug);
+  toast('switchTo("'+slug+'") — the instrument would now be showing '+(p?p.owner+'/'+p.name:slug));
+  render();
+}
+function onWatchAnother(){ toast('openDir() — the observatory directory would open here.') }
+
+function gauge(nat,thr,vw){
+  const g=document.getElementById('gauge');
+  document.getElementById('roNat').textContent=Math.round(nat).toLocaleString()+'px';
+  document.getElementById('roThr').textContent=Math.round(thr).toLocaleString()+'px';
+  document.getElementById('roVw').textContent=Math.round(vw).toLocaleString()+'px';
+  document.getElementById('gFill').style.width=Math.min(100,nat/vw*100)+'%';
+  document.getElementById('gTick').style.left=(COLLAPSE_AT*100)+'%';
+  g.classList.toggle('over',nat>=thr);
+}
+
+const fw=document.getElementById('fw'), frame=document.getElementById('frame');
+function setW(px){
+  const w=Math.max(320,Math.min(3800,Math.round(px)));
+  frame.style.width=w+'px'; fw.value=w; remeasure(); if(WM.open)placePanel();
+}
+fw.oninput=()=>setW(+fw.value);
+new ResizeObserver(()=>{remeasure(); if(WM.open)placePanel()}).observe(frame);
+
+const grip=document.getElementById('grip');
+grip.addEventListener('pointerdown',e=>{
+  e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add('on');
+  const x0=e.clientX, w0=frame.getBoundingClientRect().width;
+  const mv=ev=>setW(w0+(ev.clientX-x0));
+  const up=()=>{grip.classList.remove('on');grip.removeEventListener('pointermove',mv);
+    grip.removeEventListener('pointerup',up)};
+  grip.addEventListener('pointermove',mv); grip.addEventListener('pointerup',up);
+});
+
+document.getElementById('tMis').onchange=e=>{
+  WM.want=e.target.checked?'apes':null; render();
+};
+document.getElementById('tFail').onchange=e=>{
+  const p=WM.projects.find(x=>x.slug==='apes');
+  if(p)p.error=e.target.checked?'gh: HTTP 403 rate limited on the first page':null;
+  render();
+};
+document.getElementById('bAdd').onclick=()=>{
+  const next=POOL.find(c=>!WM.projects.some(p=>p.slug===c.slug));
+  if(!next){toast('the pool is spent — drop one to add another');return}
+  WM.projects.push(Object.assign({},next));
+  toast('watching '+WM.projects.length+' — the threshold is re-evaluated on the list, not only on resize');
+  render();
+};
+document.getElementById('bDrop').onclick=()=>{
+  if(WM.projects.length<=2){toast('one project is not a choice — the row earns its place at two');return}
+  const gone=WM.projects.pop();
+  if(WM.shown===gone.slug)WM.shown=WM.projects[0].slug;
+  if(WM.want===gone.slug)WM.want=null;
+  toast('watching '+WM.projects.length);
+  render();
+};
+
+render();
+setInterval(()=>{if(!WM.open)render()},30000);   /* the relative times keep moving */
+</script>
+</body>
+</html>

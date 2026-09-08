@@ -186,8 +186,22 @@
      instrument is showing, one click to point it elsewhere. The directory
      behind [p] stays the deep surface (induction, roots, the check
      battery); this strip is the everyday one. */
-  #projstrip{display:flex;align-items:stretch;gap:7px;background:var(--bg2);overflow-x:auto}
+  /* The row is a block, and the flex lives one level in, for two reasons: the
+     open panel must not be clipped by an overflow container, and the ghost the
+     threshold is measured from has to be laid out by the same rules as the
+     strip without being in its flow. */
+  #projstrip{position:relative;background:var(--bg2)}
   #projstrip.on{padding:8px 14px;border-bottom:1px solid var(--line)}
+  .pstriprow{display:flex;align-items:stretch;gap:7px;overflow-x:auto}
+  /* The measurement twin. width:max-content is the whole trick — it lays out
+     at the width the strip WANTS, which is the number the 80% rule needs and
+     the one number the live strip cannot report, since a collapsed strip
+     measures nothing and would never decide to come back. visibility:hidden
+     rather than display:none, because display:none has no width at all. */
+  .pghost{
+    position:absolute;left:0;top:0;width:max-content;
+    visibility:hidden;pointer-events:none;overflow:visible;
+  }
   .plabel{align-self:center;flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);margin-right:5px}
   .ptab{
     flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
@@ -211,6 +225,72 @@
   .pmore{flex:none;align-self:center;font-size:10px;letter-spacing:.1em;border-style:dashed;padding:8px 12px}
   .pnote{align-self:center;flex:none;font-size:9.5px;color:var(--yellow);max-width:300px;white-space:normal;line-height:1.4}
   .pnote b{color:var(--fg);font-weight:500}
+
+  /* ===== what the strip becomes when it no longer fits =====
+     Past 80% of the row's own width the tabs are replaced by one control: the
+     project being shown, and a panel under it to pick another or watch a new
+     one. It is anchored rather than overlaid — no scrim, no focus trap, no
+     modal semantics to get wrong — and at the widths this instrument is
+     actually read in, two tabs already clear the threshold, so this is the
+     everyday state rather than the exception. */
+  .wm{position:relative;display:flex;align-items:center;gap:9px}
+  .wmtrigger{
+    flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:10px;text-align:left;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    padding:7px 12px 8px;font:inherit;color:var(--fg);cursor:pointer;letter-spacing:normal;
+  }
+  .wmtrigger:hover,.wmtrigger[aria-expanded="true"]{border-color:var(--cyan)}
+  .wmnm{display:flex;align-items:baseline;gap:6px;font-size:13px;min-width:0;flex:1 1 auto}
+  /* The owner surrenders first and completely: both halves shrinking at the
+     same rate is what lets a long owner eat a longer repository name. */
+  .wmnm .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
+  .wmnm .pnt b{color:var(--green);font-weight:700}
+  .wmnm .pnt i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .wmnm .dbadge{flex:none;margin-left:0}
+  .wmmeta{flex:none;font-size:9.5px;color:var(--ghost);white-space:nowrap}
+  .wmmeta b{color:var(--blue);font-weight:500}
+  .wmcar{flex:none;color:var(--ghost);font-size:9px}
+  @media (max-width:560px){ .wmmeta{display:none} }
+
+  .wmpanel{
+    position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:12;
+    background:var(--bg);border:1px solid var(--cyan);
+    display:flex;flex-direction:column;max-height:min(52vh,420px);
+  }
+  .wmpanel[hidden]{display:none}
+  .wmq{
+    flex:none;font:inherit;font-size:11.5px;color:var(--fg);background:var(--bg2);
+    border:none;border-bottom:1px solid var(--line);padding:9px 12px;outline:none;
+  }
+  .wmq::placeholder{color:var(--ghost)}
+  .wmq:focus{border-bottom-color:var(--cyan)}
+  .wmscroll{overflow-y:auto;min-height:0}
+  .wmopt{
+    display:block;width:100%;text-align:left;background:none;border:none;
+    border-left:2px solid transparent;padding:7px 12px;cursor:pointer;font:inherit;color:var(--fg);
+  }
+  .wmopt.cur{background:var(--line);border-left-color:var(--cyan)}
+  .wmopt.here{border-left-color:var(--green)}
+  .wmopt .onm{display:flex;align-items:baseline;gap:6px;font-size:12px;min-width:0}
+  .wmopt .onm .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
+  .wmopt .onm b{color:var(--white);font-weight:700}
+  .wmopt .onm i{color:var(--ghost);font-style:normal;font-size:9.5px;letter-spacing:.04em}
+  .wmopt.here .onm b{color:var(--green)}
+  .wmopt .om{display:block;font-size:9.5px;color:var(--ghost);margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wmopt .om b{color:var(--blue);font-weight:500}
+  .wmopt .om .oerr{color:var(--red)}
+  /* The floor sits outside the scroller rather than sticking to it, so no
+     amount of scrolling can strand the one action that resolves an empty
+     search — and an empty search selects it, rather than dead-ending. */
+  .wmfoot{flex:none;border-top:1px solid var(--line);background:var(--bg2)}
+  .wmmore{border:none;border-left:2px solid transparent;width:100%;text-align:left;
+    padding:9px 12px;font-size:10px;letter-spacing:.1em;color:var(--cyan);cursor:pointer}
+  .wmmore.cur{background:var(--line);border-left-color:var(--cyan)}
+  .wmmore .echo{color:var(--ghost);letter-spacing:0;font-size:9.5px}
+  .wmnone{padding:10px 12px;font-size:10.5px;color:var(--ghost);line-height:1.5}
+  .sronly{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
   /* ===== the observatory directory: what is watched, what is on this machine,
      and whether a candidate can honestly be watched at all ===== */
@@ -447,13 +527,6 @@
 /* ================= utils ================= */
 const $=s=>document.querySelector(s);
 const LOCAL_API=/^(127\.0\.0\.1|localhost)$/.test(location.hostname);
-// What the server is willing to do decides what we draw. A server launched
-// without FIX_OBSERVATORY_ALLOW_AGENTS=1 refuses /api/allocate, so the button
-// must not exist against it — a control that always answers "no" is worse
-// than no control. Absent caps (older server, fetch failed) stays false:
-// undeclared is not enabled.
-let CAPS={allocate:false};
-if(LOCAL_API)fetch('/api/caps').then(r=>r.ok?r.json():null).then(c=>{if(c)CAPS=c}).catch(()=>{});
 const cv=$('#world'), cx=cv.getContext('2d');
 const CSS=getComputedStyle(document.documentElement);
 const C=n=>CSS.getPropertyValue('--'+n).trim();
@@ -837,31 +910,8 @@ function renderInspector(){
   <h3>THE STORY</h3>
   <div class="story">${story.map(e=>`<div class="ev ${e.cls}"><span class="t">+${fmtDur(e.t-a.opened)}</span>${e.html}</div>`).join('')}</div>
   ${fogNote}
-  ${LOCAL_API&&CAPS.allocate&&!a.closed?`<button id="allocBtn" style="margin-top:12px;width:100%;padding:9px 0;color:var(--violet);border-color:var(--violet);letter-spacing:.16em;font-weight:700" title="one click · one disposable agent — opens a terminal running claude primed on this ticket">⚡ ALLOCATE AGENT</button>`:''}
   ${a.url?`<div style="margin-top:10px"><a class="ghlink" href="${esc(a.url)}" target="_blank">open on GitHub ↗</a></div>`:''}`;
   $('#inspclose').onclick=()=>{sel=null;renderRail()};
-  const ab=$('#allocBtn');
-  if(ab)ab.onclick=async()=>{
-    ab.disabled=true;ab.textContent='ALLOCATING…';
-    try{
-      const r=await fetch('/api/allocate',{method:'POST',
-        headers:{'Content-Type':'application/json','X-Fix-Observatory':'1'},
-        // Which repository's #N, said explicitly. The server has an active
-        // project of its own and two tabs can be looking at two different
-        // ones, so an unqualified number is an agent allocated against
-        // whichever repository somebody else last selected.
-        body:JSON.stringify({number:a.number,project:PROJECT})});
-      const j=await r.json();
-      ab.textContent=j.ok?'⚡ AGENT SPAWNED — check your terminal':'✕ '+(j.error||'allocation failed');
-      // the server knows things the button cannot: which claude it found, or
-      // that the one it found did not answer. Say it here rather than letting
-      // the user discover a dead agent in a terminal we already called a win.
-      if(j.note){const n=document.createElement('div');
-        n.className='fogchip';n.style.marginTop='6px';n.textContent=j.note;
-        ab.insertAdjacentElement('afterend',n)}
-      if(!j.ok)ab.disabled=false;
-    }catch(_){ab.textContent='✕ observatory server not reachable';ab.disabled=false}
-  };
 }
 
 /* ================= feed ================= */
@@ -955,10 +1005,21 @@ function radiusOf(ageDays,zone,band){
   const rmax=Math.min(zone.w*0.38,zone.h*0.42);
   return Math.min(rmax,26+24*Math.log2(1+ageDays)+band*20);
 }
-function posOf(a,zone,motion){
+/* An artifact's place in the swarm is a pure function of four numbers seeded from
+   its issue number, its age at the cursor, and the motion clock. Nothing about it
+   depends on the frame before, which is the property that lets the whole orbit
+   move to a vertex shader and the instance buffer stay static for the life of a
+   manifest. Seed and radius are extracted so the CPU and the GPU read the same
+   definition — see MoteLayer, whose shader mirrors posOf line for line. */
+function moteSeed(a){
   let s=a._s;
   if(!s){const R=rng((a.number*2654435761)>>>0);
     s=a._s={a0:R()*6.283,dir:R()<0.5?1:-1,ph:R()*6.283,band:R()};}
+  return s;
+}
+function moteRadius(a){return Math.round((2.2+Math.min(3,a.comments*0.35))*2)/2}
+function posOf(a,zone,motion){
+  const s=moteSeed(a);
   const age=Math.max(0,(T-a.opened)/DAY);
   const r=radiusOf(age,zone,s.band);
   const w=s.dir*(0.25/(1+age*0.4)+0.025);
@@ -1014,6 +1075,223 @@ function attrColor(a){
     :COL.ghost;
 }
 
+/* ================= the mote layer =================
+   Canvas 2D does not charge for the pixels a mote covers. It charges for the CALL,
+   and it charges roughly four times as much once a frame crosses about 1,750 of
+   them: measured here at 1.1us per blit below that line and 4.7us above, with the
+   step moving down by exactly 400 when 400 unrelated operations were added ahead
+   of the motes. It is a budget for the whole frame — background, rings, hive, lane
+   and flow diagram all spend from it — and a swarm of 3,529 blows it on its own.
+   Shrinking the sprites does not help (8px dots: 11.9ms against 11.1ms) and neither
+   does spreading them out (18.5x overdraw against 2.7x: 11.2ms against 11.4ms).
+   The only move that helps is to stop making the calls.
+
+   So the swarm is one instanced draw call. Position is computed in the vertex
+   shader from the same four seeded numbers posOf uses, which is possible because
+   posOf is pure — see the comment there. The instance buffer is uploaded once when
+   a manifest lands and never touched again; a frame sets six uniforms and draws.
+   Scope and aliveness are decided on the GPU too, so switching scope or scrubbing
+   the cursor costs nothing on the CPU.
+
+   It renders to a canvas that is never in the document, which the frame then
+   composites in one drawImage exactly where the mote loop used to run. That keeps
+   the painter's order identical — hive under, lane and sparks over — with no
+   z-index, no pointer-events, and no second element for the layout to disagree
+   about.
+
+   The 2D path below stays, and is used verbatim when WebGL2 is missing or the
+   context is lost. Hover uses posOf on the CPU either way, so if this shader and
+   posOf ever drift apart, hovering a mote stops matching what is drawn — that
+   mismatch is the canary, and the two must be edited together. */
+const MoteLayer=(()=>{
+  const ATTR=['marker','smell','hint','none','unmeasured'];
+  const SCOPE_BITS={all:31,agentic:7,marker:1};
+  const FLOATS=13;                 // life 2 · orbit 4 · look 4 · colour 3
+  const VS=`#version 300 es
+  layout(location=0) in vec2 aCorner;
+  layout(location=1) in vec2 aLife;    // opened, closed — days from t0; closed<0 = still open
+  layout(location=2) in vec4 aOrbit;   // a0, dir, phase, band
+  layout(location=3) in vec4 aLook;    // radius, glow, flags, attribution index
+  layout(location=4) in vec3 aColour;
+  uniform vec2 uViewport;              // device pixels
+  uniform vec4 uZone;                  // cx, cy, w, h — CSS pixels
+  uniform float uDpr, uTdays, uMotion;
+  uniform int uScope;
+  out vec2 vLocal; out vec3 vColour; out float vGlow; out float vFlags; out float vRad;
+  void main(){
+    bool shown = (uScope & (1 << int(aLook.w))) != 0;
+    bool alive = aLife.x <= uTdays && (aLife.y < 0.0 || aLife.y > uTdays);
+    if(!shown || !alive){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }  // off clip
+    /* mirrors posOf + radiusOf, exactly */
+    float age  = max(0.0, uTdays - aLife.x);
+    float rmax = min(uZone.z * 0.38, uZone.w * 0.42);
+    float r    = min(rmax, 26.0 + 24.0 * log2(1.0 + age) + aOrbit.w * 20.0);
+    float w    = aOrbit.y * (0.25 / (1.0 + age * 0.4) + 0.025);
+    float ang  = aOrbit.x + w * uMotion;
+    float wob  = sin(uMotion * 0.4 + aOrbit.z) * 4.0;
+    vec2 centre = vec2(uZone.x + cos(ang) * (r + wob) * 1.45,
+                       uZone.y + sin(ang) * (r + wob) * 0.75);
+    float rad = aLook.x, glow = aLook.y;
+    /* The same half-size the sprite used, including the 4px a reopened mote needs
+       for its ring. Get this wrong and the ring is clipped by the quad's own edge,
+       which draws it as four corner arcs — a little square around the mote. */
+    bool reopened = (int(aLook.z + 0.5) & 4) != 0;
+    float extent = rad + glow + (reopened ? 4.0 : 0.0) + 2.0;
+    vec2 p = centre + aCorner * extent;
+    vLocal = aCorner * extent / rad;          // 1.0 at the mote's edge
+    vColour = aColour; vGlow = glow / rad; vFlags = aLook.z; vRad = rad;
+    vec2 clip = (p * uDpr / uViewport) * 2.0 - 1.0;
+    gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+  }`;
+  const FS=`#version 300 es
+  precision highp float;
+  in vec2 vLocal; in vec3 vColour; in float vGlow; in float vFlags; in float vRad;
+  uniform vec3 uReopen;
+  out vec4 frag;
+  void main(){
+    int flags = int(vFlags + 0.5);
+    bool isPR   = (flags & 1) != 0;
+    bool hollow = (flags & 2) != 0;
+    bool reop   = (flags & 4) != 0;
+    /* One local unit is one mote radius in CSS pixels, so every offset the 2D
+       sprite measured in CSS pixels converts by dividing by vRad — which is right
+       at any device pixel ratio, where deriving a scale from fwidth would be off
+       by exactly that ratio. fwidth is still what antialiases the edge, because
+       that genuinely is a screen-space question. */
+    float d    = isPR ? (abs(vLocal.x) + abs(vLocal.y)) : length(vLocal);
+    float edge = isPR ? (1.0 + 1.4 / vRad) : 1.0;   // diamond half-diagonal is r+1.4
+    float aa   = fwidth(d) + 1e-6;
+    float body = hollow
+      ? 1.0 - smoothstep(0.55 / vRad, 0.55 / vRad + aa, abs(d - edge))  // 1.1px stroke
+      : 1.0 - smoothstep(edge - aa, edge + aa, d);
+    /* Stands in for shadowBlur. Canvas blurs the shape with a gaussian of sigma
+       blur/2, which spreads a 3px disc's ink over a wide skirt — so the halo peaks
+       far dimmer than the mote, around a sixth of it, rather than the half you get
+       by eye. Matching that number is what keeps agent-smell reading as a glow
+       instead of a bloom. */
+    float sigma = vGlow * 0.5;
+    float halo = vGlow > 0.0
+      ? 0.17 * exp(-0.5 * pow(max(0.0, length(vLocal) - 1.0) / max(sigma, 1e-4), 2.0))
+      : 0.0;
+    vec3 col = vColour;
+    float a = clamp(body + halo * (1.0 - body), 0.0, 1.0);
+    if(reop){                                            // the red reopened ring
+      float ring = 1.0 - smoothstep(0.5 / vRad, 0.5 / vRad + aa,
+                                    abs(length(vLocal) - (1.0 + 3.0 / vRad)));
+      if(ring > 0.0){ col = mix(col, uReopen, ring); a = max(a, ring); }
+    }
+    if(a < 0.004) discard;
+    frag = vec4(col * a, a);                             // premultiplied
+  }`;
+
+  let gl=null, prog=null, vao=null, inst=null, u={}, ok=false, tried=false;
+  let cv=null, count=0, key='', capacity=0;
+
+  const rgb=(()=>{                       // any CSS colour → [0..1, 0..1, 0..1]
+    const c=document.createElement('canvas'); c.width=c.height=1;
+    const g=c.getContext('2d',{willReadFrequently:true});
+    const memo=new Map();
+    return s=>{
+      let v=memo.get(s); if(v)return v;
+      g.clearRect(0,0,1,1); g.fillStyle=s; g.fillRect(0,0,1,1);
+      const p=g.getImageData(0,0,1,1).data;
+      v=[p[0]/255,p[1]/255,p[2]/255]; memo.set(s,v); return v;
+    };
+  })();
+
+  function shader(type,src){
+    const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
+      throw new Error(gl.getShaderInfoLog(s)||'shader compile failed');
+    return s;
+  }
+
+  function init(){
+    tried=true;
+    cv=document.createElement('canvas');            // never attached to the document
+    gl=cv.getContext('webgl2',{alpha:true,antialias:false,premultipliedAlpha:true,
+                               depth:false,stencil:false});
+    if(!gl)return false;
+    cv.addEventListener('webglcontextlost',e=>{e.preventDefault();ok=false;key=''});
+    cv.addEventListener('webglcontextrestored',()=>{tried=false;ok=false;key='';});
+    prog=gl.createProgram();
+    gl.attachShader(prog,shader(gl.VERTEX_SHADER,VS));
+    gl.attachShader(prog,shader(gl.FRAGMENT_SHADER,FS));
+    gl.linkProgram(prog);
+    if(!gl.getProgramParameter(prog,gl.LINK_STATUS))
+      throw new Error(gl.getProgramInfoLog(prog)||'link failed');
+    gl.useProgram(prog);
+    for(const n of ['uViewport','uZone','uDpr','uTdays','uMotion','uScope','uReopen'])
+      u[n]=gl.getUniformLocation(prog,n);
+    vao=gl.createVertexArray(); gl.bindVertexArray(vao);
+    const quad=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, 1,1]),gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+    inst=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,inst);
+    const B=FLOATS*4;
+    [[1,2,0],[2,4,2],[3,4,6],[4,3,10]].forEach(([loc,size,off])=>{
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc,size,gl.FLOAT,false,B,off*4);
+      gl.vertexAttribDivisor(loc,1);
+    });
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform3fv(u.uReopen,rgb(COL.red));
+    ok=true;
+    return true;
+  }
+
+  /* One pass over the manifest, once. Everything a mote needs for the rest of its
+     life on screen goes in here; nothing per-frame ever touches it again. */
+  function upload(d){
+    const arts=d.artifacts, n=arts.length;
+    const data=new Float32Array(n*FLOATS);
+    for(let i=0;i<n;i++){
+      const a=arts[i], s=moteSeed(a), o=i*FLOATS;
+      const hollow=a.attribution==='unmeasured';
+      const glow=(a.attribution==='none'||hollow)?0:a.attribution==='smell'?12:9;
+      const c=rgb(attrColor(a));
+      data[o  ]=(a.opened-d.t0)/DAY;
+      data[o+1]=a.closed?(a.closed-d.t0)/DAY:-1;
+      data[o+2]=s.a0; data[o+3]=s.dir; data[o+4]=s.ph; data[o+5]=s.band;
+      data[o+6]=moteRadius(a); data[o+7]=glow;
+      data[o+8]=(a.kind==='pr'?1:0)|(hollow?2:0)|(d.reopened.has(a.number)?4:0);
+      data[o+9]=Math.max(0,ATTR.indexOf(a.attribution));
+      data[o+10]=c[0]; data[o+11]=c[1]; data[o+12]=c[2];
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER,inst);
+    if(n>capacity){ gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW); capacity=n; }
+    else gl.bufferSubData(gl.ARRAY_BUFFER,0,data);
+    count=n;
+  }
+
+  return {
+    get ok(){return ok},
+    /* Returns the canvas to composite, or null to fall back to the 2D loop. */
+    render(d,zone,W,H,dpr,motion){
+      if(!tried){ try{ init(); }catch(err){ ok=false; console.warn('[swarm] mote layer unavailable:',err.message); } }
+      if(!ok||!d||!d.artifacts.length)return null;
+      const w=Math.round(W*dpr), h=Math.round(H*dpr);
+      if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h}
+      const k=d.fetched+':'+d.artifacts.length;
+      if(k!==key){ upload(d); key=k; }
+      gl.viewport(0,0,w,h);
+      gl.bindVertexArray(vao);
+      gl.useProgram(prog);
+      gl.uniform2f(u.uViewport,w,h);
+      gl.uniform4f(u.uZone,zone.cx,zone.cy,zone.w,zone.h);
+      gl.uniform1f(u.uDpr,dpr);
+      gl.uniform1f(u.uTdays,(T-d.t0)/DAY);
+      gl.uniform1f(u.uMotion,motion);
+      gl.uniform1i(u.uScope,SCOPE_BITS[scopeKey()]??31);
+      gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,count);
+      return cv;
+    },
+    stats(){return {ok,instances:count,key}},
+  };
+})();
+
 function draw(ts){
   const {W,H,dpr}=sizeCanvas();
   const dt=lastTs?Math.min(120,ts-lastTs):16; lastTs=ts;
@@ -1066,16 +1344,41 @@ function draw(ts){
     cx.fillStyle=COL.ghost;cx.font='9.5px JetBrains Mono,monospace';cx.textAlign='center';
     cx.fillText(d.repo,zone.cx,zone.cy+44);
 
-    /* alive swarm */
-    for(const a of rows){
-      if(a.opened>T||(a.closed&&a.closed<=T))continue;
-      const p=posOf(a,zone,anim);
-      const r=Math.round((2.2+Math.min(3,a.comments*0.35))*2)/2;
-      const sp=moteSprite(attrColor(a),a.attribution,a.kind==='pr',r,d.reopened.has(a.number),dpr);
-      cx.drawImage(sp.cv,Math.round(p.x-sp.half),Math.round(p.y-sp.half),sp.size,sp.size);
-      if(sel===a.number){cx.strokeStyle=COL.white;cx.lineWidth=1.2;cx.beginPath();cx.arc(p.x,p.y,r+5.5,0,7);cx.stroke()}
-      else if(hover&&hover.a===a){cx.strokeStyle=COL.white;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+5,0,7);cx.stroke()}
-      hits.push({x:p.x,y:p.y,a});
+    /* alive swarm — one instanced draw call, composited here so the painter's
+       order is what it always was: the hive is under it, the lane and the sparks
+       are over it. Falls back to the sprite loop when there is no WebGL2. */
+    const swarm=MoteLayer.render(d,zone,W,H,dpr,anim);
+    if(swarm){
+      cx.drawImage(swarm,0,0,W,H);
+      /* Positions are only needed for pointing at a mote, so they are computed
+         only when something can be pointed at — 0.6ms that a still cursor over an
+         empty canvas no longer pays. */
+      if(mouse.x>=0||sel!=null){
+        for(const a of rows){
+          if(a.opened>T||(a.closed&&a.closed<=T))continue;
+          const p=posOf(a,zone,anim);
+          hits.push({x:p.x,y:p.y,a});
+        }
+      }
+      const ring=(a,w,pad)=>{
+        const p=posOf(a,zone,anim);
+        cx.strokeStyle=COL.white;cx.lineWidth=w;
+        cx.beginPath();cx.arc(p.x,p.y,moteRadius(a)+pad,0,7);cx.stroke();
+      };
+      const selA=sel!=null?d.byNumber.get(sel):null;
+      if(selA&&selA.opened<=T&&(!selA.closed||selA.closed>T)&&inScope(selA))ring(selA,1.2,5.5);
+      else if(hover)ring(hover.a,1,5);
+    } else {
+      for(const a of rows){
+        if(a.opened>T||(a.closed&&a.closed<=T))continue;
+        const p=posOf(a,zone,anim);
+        const r=moteRadius(a);
+        const sp=moteSprite(attrColor(a),a.attribution,a.kind==='pr',r,d.reopened.has(a.number),dpr);
+        cx.drawImage(sp.cv,Math.round(p.x-sp.half),Math.round(p.y-sp.half),sp.size,sp.size);
+        if(sel===a.number){cx.strokeStyle=COL.white;cx.lineWidth=1.2;cx.beginPath();cx.arc(p.x,p.y,r+5.5,0,7);cx.stroke()}
+        else if(hover&&hover.a===a){cx.strokeStyle=COL.white;cx.lineWidth=1;cx.beginPath();cx.arc(p.x,p.y,r+5,0,7);cx.stroke()}
+        hits.push({x:p.x,y:p.y,a});
+      }
     }
 
     /* event lane: ticks by time. Forty thousand of them, so they are collected
@@ -1626,6 +1929,143 @@ function shownSlug(){
   const p=DIR.projects.find(x=>x.repo===DATA.repo);
   return p?p.slug:null;
 }
+/* The collapsed control's state. mode is decided by measurement, never by a
+   project count: the same four projects fit in a wide window and do not fit in
+   a tiled pane, and the rule is about the row, not the registry. */
+const WM={mode:'strip',open:false,q:'',cur:0,view:[]};
+
+/* Subsequence match over "name owner", so "tdel" finds terminal-delight and
+   "bfsobs" finds the observatory under BROWN-FAMILY-SPORTS. Matches are not
+   highlighted: cyan and green already mean interactive and showing-now on this
+   page, and the directory's own search one keypress away is a plain filter —
+   two searches for the same task should not read as two different ideas. */
+function wmMatch(p,q){
+  if(!q)return 0;
+  const name=(p.repo.split('/')[1]||p.repo).toLowerCase();
+  const owner=(p.repo.split('/')[0]||'').toLowerCase();
+  const hay=name+' '+owner, needle=q.toLowerCase().replace(/\s+/g,'');
+  let i=0,score=0,run=0,last=-1;
+  for(const ch of needle){
+    const at=hay.indexOf(ch,i);
+    if(at<0)return -1;
+    run=at===last+1?run+1:0;
+    score+=10+run*6+(at===0?14:0)+(at<name.length?4:0);
+    last=at;i=at+1;
+  }
+  return score-Math.max(0,i-needle.length);
+}
+
+function wmModel(ps,q){
+  const rows=ps.map(p=>({p,s:wmMatch(p,q)})).filter(r=>!q||r.s>=0);
+  if(q)rows.sort((a,b)=>b.s-a.s);
+  return rows.map(r=>r.p);
+}
+
+function wmMeta(p){
+  const bits=[p.artifacts==null?'not mined':`<b>${p.artifacts.toLocaleString()}</b> artifacts`];
+  if(p.fetched_at)bits.push(ago(p.fetched_at));
+  if(p.error)bits.push(`<span class="oerr">${esc(p.error)}</span>`);
+  return bits.join(' · ');
+}
+function wmBadges(p,have,want){
+  const pending=p.slug===want&&have===null;
+  const failed=pending&&p.error&&p.artifacts==null;
+  return (p.artifacts==null?'<span class="dbadge unmined">NOT MINED</span>':'')
+    +(p.seeded?'<span class="dbadge seed">SEED</span>':'')
+    +(p.mining?'<span class="dbadge mining">MINING</span>':'')
+    +(failed?'<span class="dbadge fail">MINE FAILED</span>':pending?'<span class="dbadge mining">OPENING</span>':'');
+}
+
+function wmOptionsHTML(have,want){
+  const rows=WM.view;
+  const list=rows.map((p,i)=>`<button class="wmopt${p.slug===have?' here':''}${i===WM.cur?' cur':''}"
+      role="option" id="wmopt-${i}" aria-selected="${i===WM.cur}"
+      data-slug="${esc(p.slug)}" tabindex="-1">
+      <span class="onm"><span class="pnt">${nwoHtml(p.repo)}</span>${wmBadges(p,have,want)}${
+        p.slug===have?'<span class="dbadge watched">SHOWING</span>':''}</span>
+      <span class="om">${wmMeta(p)}</span></button>`).join('');
+  const none=rows.length?'':`<div class="wmnone">no watched project matches
+      <b>${esc(WM.q)}</b> — the row below looks for it on this machine instead.</div>`;
+  const moreCur=WM.cur>=rows.length;
+  return `<div class="wmscroll" role="presentation">${list}${none}</div>
+    <div class="wmfoot" role="presentation">
+      <div class="wmmore${moreCur?' cur':''}" role="option" id="wmopt-more"
+           aria-selected="${moreCur}">＋ WATCH ANOTHER${
+        WM.q?`<span class="echo"> — look for ${esc(WM.q)} on this machine</span>`:''}</div>
+    </div>`;
+}
+
+function menuHTML(ps,have,want){
+  const cur=ps.find(p=>p.slug===have)||ps[0];
+  const mismatch=want&&have&&want!==have;
+  // The warning is a SIBLING of the button, not a child of it: nested inside,
+  // it becomes part of the control's own click target, and any aria-label on
+  // the button would suppress it from assistive tech entirely — which would
+  // make collapsing delete the one thing the collapsed mode has to carry.
+  return `<div class="wm">
+    <button class="wmtrigger" id="wmtrigger" aria-expanded="false"
+            aria-controls="wmpanel" aria-haspopup="dialog"
+            title="${esc(cur.repo)} — showing now. Pick another watched project, or watch a new one">
+      <span class="plabel">WATCHING</span>
+      <span class="wmnm"><span class="pnt">${nwoHtml(cur.repo)}</span>${wmBadges(cur,have,want)}</span>
+      <span class="wmmeta">${wmMeta(cur)}</span>
+      <span class="wmcar">▾</span>
+    </button>
+    <div class="wmpanel" id="wmpanel" hidden>
+      <input class="wmq" id="wmq" role="combobox" aria-expanded="true" aria-controls="wmlist"
+             aria-autocomplete="list" aria-label="filter watched projects"
+             autocomplete="off" spellcheck="false" placeholder="filter watched projects — or type a name to look for">
+      <div id="wmlist" role="listbox" aria-label="watched projects"></div>
+    </div>
+  </div>
+  ${mismatch?`<div class="pnote" role="status">the URL asked for <b>${esc(want)}</b> — showing the active project instead. Pick it below to repair the link.</div>`:''}
+  <span class="sronly" id="wmlive" aria-live="polite"></span>`;
+}
+
+function wmAnnounce(msg){const l=$('#wmlive');if(l)l.textContent=msg}
+
+function wmSync(){
+  const list=$('#wmlist');if(!list)return;
+  const have=shownSlug(), want=PROJECT;
+  list.innerHTML=wmOptionsHTML(have,want);
+  const q=$('#wmq');
+  if(q)q.setAttribute('aria-activedescendant',WM.cur>=WM.view.length?'wmopt-more':'wmopt-'+WM.cur);
+  const cur=list.querySelector('.wmopt.cur');
+  if(cur)cur.scrollIntoView({block:'nearest'});
+  for(const b of list.querySelectorAll('.wmopt'))
+    b.onmousedown=e=>{e.preventDefault();wmCommit(b.dataset.slug)};
+  const more=list.querySelector('.wmmore');
+  if(more)more.onmousedown=e=>{e.preventDefault();wmCommit(null)};
+}
+
+function wmOpen(){
+  if(WM.open)return;
+  WM.open=true;WM.q='';WM.cur=0;
+  const t=$('#wmtrigger'),p=$('#wmpanel');
+  if(!t||!p)return;
+  t.setAttribute('aria-expanded','true');p.hidden=false;
+  WM.view=wmModel(DIR.projects,'');
+  wmSync();
+  const q=$('#wmq');q.value='';q.focus();
+  wmAnnounce(`${WM.view.length} watched project${WM.view.length===1?'':'s'}`);
+}
+function wmClose(refocus){
+  if(!WM.open)return;
+  WM.open=false;
+  const t=$('#wmtrigger'),p=$('#wmpanel');
+  if(p)p.hidden=true;
+  if(t){t.setAttribute('aria-expanded','false');if(refocus)t.focus()}
+}
+function wmCommit(slug){
+  // null is the induct row. The typed query rides into the directory rather
+  // than being thrown away: a search that found nothing watched is exactly the
+  // moment somebody wants to look for it on this machine.
+  if(slug===null){const q=WM.q;wmClose(false);DIR.q=q;openDir();if(q)onQuery();return}
+  const have=shownSlug();
+  wmClose(false);
+  if(slug!==have){wmAnnounce('opening '+slug);switchTo(slug)}
+}
+
 function renderStrip(){
   const el=$('#projstrip'), ps=DIR.projects;
   // The strip renders for ONE watched project too, which it did not have to
@@ -1637,10 +2077,27 @@ function renderStrip(){
   if(!LOCAL_API||!ps.length){el.className='';el.innerHTML='';return}
   const have=shownSlug(), want=PROJECT;
   el.className='on';
+  const row=stripRowHTML(ps,have,want);
+  // The live rendering, whichever mode measurement chose, and beside it the
+  // ghost: the same row, always, in both modes. Measuring a rendering of the
+  // mode it decides is what turns a threshold into a feedback loop.
+  el.innerHTML=(WM.mode==='menu'?menuHTML(ps,have,want):`<div class="pstriprow">${row}</div>`)
+    +`<div class="pstriprow pghost" aria-hidden="true" inert>${row}</div>`;
+  if(WM.mode==='menu')wireMenu();
+  else{
+    for(const b of el.querySelectorAll('.pstriprow:not(.pghost) .ptab'))
+      b.onclick=()=>{if(b.dataset.slug!==have)switchTo(b.dataset.slug)};
+    const more=el.querySelector('.pstriprow:not(.pghost) .pmore');
+    if(more)more.onclick=openDir;
+  }
+  remeasure();
+}
+
+function stripRowHTML(ps,have,want){
   // The mismatch warning leads the strip rather than trailing it: with
   // enough tabs the strip scrolls, and a warning parked past the scroll
   // edge is invisible exactly when it applies.
-  el.innerHTML=`<span class="plabel">WATCHING</span>`
+  return `<span class="plabel">WATCHING</span>`
   +(want&&have&&want!==have
     ?`<span class="pnote" title="an unknown or stale project in the URL resolves to the server's active project rather than an error — the tabs are live, so picking one repairs the link">the URL asked for <b>${esc(want)}</b> — showing the active project instead</span>`:'')
   +ps.map(p=>{
@@ -1669,9 +2126,82 @@ function renderStrip(){
       <span class="pm">${bits.join(' · ')}</span></button>`;
   }).join('')
   +`<button class="pmore" title="[p] the observatory directory — induct any repository on this machine">＋ WATCH ANOTHER</button>`;
-  for(const b of el.querySelectorAll('.ptab'))
-    b.onclick=()=>{if(b.dataset.slug!==have)switchTo(b.dataset.slug)};
-  el.querySelector('.pmore').onclick=openDir;
+}
+
+/* The rule, in one place. Natural width comes off the ghost as a border-box
+   offsetWidth — not scrollWidth, which drops the row's trailing padding, and
+   not contentRect, which drops it too. It is compared against the HOST's own
+   width rather than the window's, which is what makes this work in a tiled
+   pane, beside the rail, or with a scrollbar present. Asymmetric edges (0.80
+   to collapse, 0.76 to come back) keep a drag parked on the line from
+   flapping; the guard below means a verdict that changes nothing writes
+   nothing. */
+function remeasure(){
+  const el=$('#projstrip');
+  if(!el||!el.classList.contains('on'))return;
+  const g=el.querySelector('.pghost');
+  if(!g)return;
+  const cs=getComputedStyle(el);
+  const need=g.offsetWidth+parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight);
+  const have=el.clientWidth;
+  if(!have)return;
+  const ratio=need/have;
+  const next=WM.mode==='menu'?(ratio<0.76?'strip':'menu'):(ratio>=0.80?'menu':'strip');
+  if(next===WM.mode)return;
+  WM.mode=next;
+  const hadFocus=el.contains(document.activeElement);
+  WM.open=false;
+  renderStrip();
+  // Coming back to the strip destroys a focused filter input; land the
+  // keyboard on the tab that was showing rather than on <body>.
+  if(hadFocus){
+    const t=el.querySelector(WM.mode==='menu'?'#wmtrigger':'.pstriprow:not(.pghost) .ptab.here')
+          ||el.querySelector('.pstriprow:not(.pghost) .ptab');
+    if(t)t.focus();
+  }
+}
+
+function wireMenu(){
+  const t=$('#wmtrigger');
+  if(!t)return;
+  t.onclick=()=>{WM.open?wmClose(true):wmOpen()};
+  t.onkeydown=e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();wmOpen()}
+    else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey){wmOpen();const q=$('#wmq');if(q){q.value=e.key;wmFilter()}e.preventDefault()}
+  };
+  const q=$('#wmq');
+  if(!q)return;
+  q.oninput=wmFilter;
+  q.onkeydown=e=>{
+    const n=WM.view.length; // +1 for the induct row, which is always last
+    if(e.key==='ArrowDown'){WM.cur=Math.min(n,WM.cur+1);wmSync();e.preventDefault()}
+    else if(e.key==='ArrowUp'){WM.cur=Math.max(0,WM.cur-1);wmSync();e.preventDefault()}
+    else if(e.key==='Home'){WM.cur=0;wmSync();e.preventDefault()}
+    else if(e.key==='End'){WM.cur=n;wmSync();e.preventDefault()}
+    else if(e.key==='Enter'){
+      e.preventDefault();
+      wmCommit(WM.cur>=n?null:WM.view[WM.cur].slug);
+    }
+    else if(e.key==='Escape'){
+      // Two stages, the same as the directory's own filter: a mistyped query
+      // clears, and only an empty one closes.
+      e.preventDefault();
+      if(q.value){q.value='';wmFilter();return}
+      wmClose(true);
+    }
+    else if(e.key==='Tab'){wmClose(false)}   // let it move on, do not trap
+  };
+}
+
+function wmFilter(){
+  const q=$('#wmq');if(!q)return;
+  WM.q=q.value.trim();
+  WM.view=wmModel(DIR.projects,WM.q);
+  WM.cur=0;
+  wmSync();
+  wmAnnounce(WM.view.length
+    ?`${WM.view.length} of ${DIR.projects.length} match`
+    :`no watched project matches ${WM.q} — watch another is selected`);
 }
 
 $('#dclose').onclick=closeDir;
@@ -1750,6 +2280,36 @@ setInterval(()=>{
   // counts, badges, and projects another tab or the bar widget inducted
   if(LOCAL_API)refreshDir();
 },45000);
+
+/* Both edges of the collapse rule are observed rather than polled: the host,
+   which changes when the window or the pane does, and the ghost, which changes
+   when the project list does. Coalesced into one frame, so dragging an edge
+   costs one measurement per paint and no layout thrash. */
+let wmRaf=0;
+function wmNudge(){
+  if(wmRaf)return;
+  wmRaf=requestAnimationFrame(()=>{wmRaf=0;remeasure()});
+}
+// The observer is held in a binding rather than left anonymous: an observer
+// with no reference is collectable, and the failure is silent — the control
+// simply stops noticing the window.
+const WM_RO=new ResizeObserver(wmNudge);
+WM_RO.observe($('#projstrip'));
+// A frame callback is the right place to measure, and a hidden tab is given
+// no frames at all, so the resize itself is also listened for: coming back to
+// a pane that was resized while the tab was in the background must not need a
+// project switch to notice.
+addEventListener('resize',wmNudge);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)wmNudge()});
+// The first measurement necessarily happens in whatever monospace preceded
+// JetBrains Mono, and the verdict can sit either side of the line.
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(remeasure);
+// One listener for the page rather than one per render: a click outside the
+// control closes it, a click inside is the control's own business.
+document.addEventListener('mousedown',e=>{
+  if(WM.open&&!e.target.closest('.wm'))wmClose(false);
+});
+
 requestAnimationFrame(draw);
 </script>
 </body>

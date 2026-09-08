@@ -1,0 +1,1087 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WATCH SELECTOR · A · COMMAND PALETTE</title>
+<meta name="theme-color" content="#1a1b26">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500;700&display=swap">
+<style>
+  :root{
+    --bg:#1a1b26; --bg2:#16161e; --panel:#1f2335; --line:#2a2f44;
+    --dim:#414868; --ghost:#565f89; --fg:#c0caf5; --blue:#7aa2f7;
+    --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --yellow:#e0af68;
+    --violet:#bb9af7; --white:#ffffff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{color-scheme:dark}
+  body{
+    background:#101016;color:var(--blue);
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-weight:300;
+    min-height:100vh;padding:22px 24px 60px;
+  }
+  button{font:inherit}
+
+  /* ============================================================
+     LAB CHROME — the bench the component sits on. Deliberately
+     quieter than the component: the thing under test is the only
+     thing at full contrast.
+     ============================================================ */
+  .labhd{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+  .labhd h1{font-size:12px;font-weight:700;letter-spacing:.2em;color:var(--white)}
+  .labhd .sub{font-size:9.5px;letter-spacing:.16em;color:var(--ghost)}
+
+  /* The stage takes the full page width, because the whole point is that the
+     reader can widen the simulated viewport past the threshold. The reading
+     matter goes underneath it. */
+  #benchmain{min-width:0}
+  #benchside{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 18px;margin-top:16px}
+
+  /* The STAGE plays the part of the browser viewport. The component
+     measures against THIS box, not window.innerWidth, so the reader can
+     drag the threshold past the strip and watch the collapse fire live.
+     In swarm.html the one substitution is viewportW() -> innerWidth. */
+  #stage{
+    position:relative;background:var(--bg);border:1px solid var(--dim);
+    width:1400px;max-width:100%;overflow:hidden;
+  }
+  #stagehead{
+    display:flex;align-items:center;gap:16px;padding:9px 16px;
+    background:var(--bg2);border-bottom:1px solid var(--line);
+  }
+  #stagehead .mark{
+    width:26px;height:26px;flex:none;border:1px solid var(--dim);
+    display:grid;place-items:center;font-size:13px;color:var(--violet);
+  }
+  #stagehead h2{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--white);white-space:nowrap}
+  #stagehead h2 small{display:block;font-size:8px;font-weight:300;letter-spacing:.22em;color:var(--ghost);margin-top:2px}
+  #stagehead .ctrls{margin-left:auto;display:flex;gap:8px}
+  #stagehead .ctrls button{
+    font-size:10px;letter-spacing:.08em;padding:5px 10px;cursor:pointer;
+    background:transparent;color:var(--cyan);border:1px solid var(--dim);
+  }
+  #fakestats{
+    display:flex;background:var(--bg2);border-bottom:1px solid var(--line);
+    padding:0 12px;overflow:hidden;
+  }
+  #fakestats .st{padding:7px 16px 6px;border-right:1px solid var(--line);min-width:86px}
+  #fakestats .st:first-child{border-left:1px solid var(--line)}
+  #fakestats .st b{display:block;font-size:18px;font-weight:700;color:var(--fg);line-height:1.05;font-variant-numeric:tabular-nums}
+  #fakestats .st span{font-size:8.5px;letter-spacing:.16em;color:var(--ghost)}
+  #fakebody{height:380px;display:grid;place-items:center;color:var(--dim);font-size:10px;letter-spacing:.22em}
+
+  /* drag handle on the stage's right edge */
+  #grip{
+    position:absolute;top:0;right:0;width:11px;height:100%;cursor:ew-resize;z-index:6;
+    background:repeating-linear-gradient(180deg,transparent 0 4px,var(--dim) 4px 6px);
+    opacity:.5;
+  }
+  #grip:hover,#grip.dragging{opacity:1;background:repeating-linear-gradient(180deg,transparent 0 4px,var(--cyan) 4px 6px)}
+
+  .panel{background:var(--bg);border:1px solid var(--line);padding:13px 15px 15px;margin-bottom:14px}
+  .panel h3{font-size:9px;letter-spacing:.22em;color:var(--ghost);font-weight:500;margin-bottom:10px}
+  .panel h3 em{font-style:normal;color:var(--cyan)}
+
+  /* the measurement readout — the proof that requirement 1 is measured */
+  #meter{font-size:10.5px;line-height:1.85;color:var(--ghost)}
+  #meter .row{display:flex;gap:8px;align-items:baseline}
+  #meter .k{flex:none;width:112px;font-size:9px;letter-spacing:.14em}
+  #meter .v{color:var(--fg);font-variant-numeric:tabular-nums}
+  #meter .v b{color:var(--blue);font-weight:500}
+  #bar{
+    position:relative;height:15px;border:1px solid var(--line);background:var(--bg2);margin:9px 0 4px;
+  }
+  #barfill{position:absolute;left:0;top:0;bottom:0;background:var(--dim);transition:width .06s linear}
+  #barfill.over{background:var(--yellow)}
+  #barmark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--red)}
+  #barcap{font-size:8.5px;letter-spacing:.14em;color:var(--ghost);display:flex;justify-content:space-between}
+  .state{
+    display:inline-block;font-size:9px;letter-spacing:.18em;padding:3px 9px 4px;border:1px solid;font-weight:700;
+  }
+  .state.strip{color:var(--green);border-color:var(--green)}
+  .state.pal{color:var(--yellow);border-color:var(--yellow)}
+
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:16px;background:transparent;cursor:pointer;margin:2px 0 0;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:3px;background:var(--dim)}
+  input[type=range]::-moz-range-track{height:3px;background:var(--dim)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:16px;background:var(--cyan);margin-top:-6px}
+  input[type=range]::-moz-range-thumb{width:9px;height:16px;background:var(--cyan);border:none;border-radius:0}
+
+  .axes{display:flex;gap:20px;flex-wrap:wrap;margin:12px 0 10px}
+  .axes>div{flex:1 1 240px;min-width:0}
+  .axes label{display:block;font-size:9px;letter-spacing:.16em;color:var(--ghost)}
+  .axes label em{font-style:normal;color:var(--cyan);font-variant-numeric:tabular-nums}
+  .axes label span{color:var(--dim);letter-spacing:.06em}
+
+  .btnrow{display:flex;gap:7px;flex-wrap:wrap;margin-top:4px}
+  .btnrow button{
+    font-size:9.5px;letter-spacing:.1em;padding:6px 10px;cursor:pointer;
+    background:transparent;color:var(--cyan);border:1px solid var(--dim);
+  }
+  .btnrow button:hover{border-color:var(--cyan)}
+  .btnrow button.warn{color:var(--yellow);border-color:#4a4128}
+  .btnrow button.warn:hover{border-color:var(--yellow)}
+
+  #legend{font-size:10.5px;line-height:1.75;color:var(--fg)}
+  #legend ol{list-style:none;counter-reset:l}
+  #legend li{counter-increment:l;padding:5px 0 5px 26px;position:relative;border-bottom:1px solid var(--line)}
+  #legend li:last-child{border-bottom:none}
+  #legend li::before{
+    content:counter(l,decimal-leading-zero);position:absolute;left:0;top:5px;
+    font-size:9px;color:var(--dim);letter-spacing:.1em;
+  }
+  #legend b{color:var(--white);font-weight:500}
+  #legend .k{color:var(--cyan)}
+  kbd{
+    display:inline-block;border:1px solid var(--dim);padding:0 5px 1px;font:inherit;font-size:9.5px;
+    color:var(--cyan);letter-spacing:.06em;background:var(--bg2);
+  }
+
+  #toast{
+    position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:40;
+    background:var(--panel);border:1px solid var(--dim);border-left:2px solid var(--violet);
+    padding:7px 14px;font-size:10px;letter-spacing:.06em;color:var(--fg);
+    opacity:0;transition:opacity .18s;pointer-events:none;white-space:nowrap;max-width:92%;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+  #toast.on{opacity:1}
+
+  /* ============================================================
+     THE COMPONENT. Everything below this line is what gets pasted
+     into swarm.html.
+     ============================================================ */
+
+  /* ---- shared: badges, name typography (already in swarm.html) ---- */
+  .dbadge{
+    display:inline-block;font-size:8px;letter-spacing:.1em;padding:1px 5px 2px;
+    border:1px solid var(--dim);color:var(--ghost);vertical-align:1px;
+  }
+  .dbadge.seed{border-color:var(--yellow);color:var(--yellow)}
+  .dbadge.mining{border-color:var(--cyan);color:var(--cyan)}
+  .dbadge.fail{border-color:var(--red);color:var(--red)}
+  .dbadge.unmined{
+    border-color:var(--dim);color:var(--ghost);
+    background:repeating-linear-gradient(45deg,transparent 0 3px,rgba(65,72,104,.45) 3px 6px);
+  }
+
+  /* ---- BELOW THRESHOLD: the strip, unchanged from today ---- */
+  #projstrip{display:flex;align-items:stretch;gap:7px;background:var(--bg2);overflow-x:auto}
+  #projstrip.on{padding:8px 14px;border-bottom:1px solid var(--line)}
+  #projstrip:not(.on){display:none}
+  .plabel{align-self:center;flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);margin-right:5px}
+  .ptab{
+    flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+    padding:7px 14px 8px;max-width:340px;
+  }
+  .ptab:hover{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .ptab.here{border-left-color:var(--green);background:var(--line)}
+  .ptab.want{border-left-color:var(--cyan)}
+  .pn{display:flex;align-items:baseline;gap:6px;font-size:13px}
+  .pn .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  /* badges sit OUTSIDE the ellipsis: the owner may truncate, the badge may not. */
+  .pn .dbadge{flex:none;margin-left:0}
+  .pn b{color:var(--white);font-weight:700}
+  .pn i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .here .pn b,.palrow.here .pn b{color:var(--green)}
+  /* The meta line is flex for the same reason the name line is: NOT MINED is a
+     badge living in the meta row (it REPLACES the artifact count), so the
+     ellipsis has to belong to the text beside it, never to the badge. */
+  .pm{display:flex;align-items:baseline;gap:6px;font-size:9.5px;color:var(--ghost);margin-top:3px}
+  .pm .pmt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .pm .dbadge{flex:none;margin-left:0}
+  .pm b{color:var(--blue);font-weight:500}
+  .pmore{
+    flex:none;align-self:center;font-size:10px;letter-spacing:.1em;padding:8px 12px;
+    cursor:pointer;background:transparent;color:var(--cyan);border:1px dashed var(--dim);
+  }
+  .pmore:hover{border-color:var(--cyan)}
+  .pnote{align-self:center;flex:none;font-size:9.5px;color:var(--yellow);max-width:300px;white-space:normal;line-height:1.4}
+  .pnote b{color:var(--fg);font-weight:500}
+
+  /* The GHOST. An offscreen twin of the strip, laid out at max-content, whose
+     only job is to be measured. See the comment block in the script. */
+  #stripghost{
+    position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none;
+    display:flex;align-items:stretch;gap:7px;width:max-content;padding:8px 14px;
+    contain:layout style;
+  }
+
+  /* ---- AT OR ABOVE THRESHOLD: the chunky closed bar ---- */
+  #watchbar{display:none;background:var(--bg2);border-bottom:1px solid var(--line);padding:8px 14px}
+  #watchbar.on{display:block}
+  .wbrow{display:flex;align-items:stretch;gap:0}
+  #wbtrigger{
+    flex:1;min-width:0;display:flex;align-items:center;gap:14px;text-align:left;
+    font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    padding:9px 8px 10px 14px;
+  }
+  #wbtrigger:hover,#wbtrigger:focus-visible{border-color:var(--cyan);outline:none}
+  #wbtrigger:hover{border-left-color:var(--green)}
+  #wbtrigger:focus-visible{border-left-color:var(--cyan)}
+  #wbtrigger .wbl{flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);align-self:center}
+  #wbtrigger .wbmain{flex:1;min-width:0}
+  #wbtrigger .wbmain .pn{font-size:14px}
+  #wbtrigger .wbkey{
+    flex:none;align-self:center;display:flex;align-items:center;gap:7px;
+    font-size:9px;letter-spacing:.16em;color:var(--ghost);
+  }
+  #wbtrigger .wbkey .caret{color:var(--ghost);font-size:11px}
+  #wbtrigger:hover .wbkey,#wbtrigger:focus-visible .wbkey{color:var(--cyan)}
+  #wbtrigger:hover .wbkey .caret,#wbtrigger:focus-visible .wbkey .caret{color:var(--cyan)}
+  #wbtrigger .wbcount{flex:none;align-self:center;font-size:9px;letter-spacing:.14em;color:var(--ghost)}
+  #wbtrigger .wbcount b{color:var(--fg);font-weight:500}
+  /* On a genuinely narrow viewport the trimmings yield to the name. Driven off
+     the width we already measured, not a media query — the control has to work
+     inside a pane as well as inside a window. */
+  #watchbar.tight .wbcount,#watchbar.tight .wbkey .lbl,#watchbar.tight .wbl{display:none}
+
+  /* The mismatch warning is welded to the BOTTOM of the bar, sharing its
+     border, so it cannot be read as belonging to anything else on the page. */
+  #wbwarn{
+    display:none;font-size:9.5px;line-height:1.5;color:var(--yellow);
+    background:rgba(224,175,104,.07);border:1px solid var(--line);border-top:none;
+    border-left:3px solid var(--yellow);padding:6px 14px 7px;
+  }
+  #wbwarn.on{display:block}
+  #wbwarn b{color:var(--fg);font-weight:500}
+
+  /* ---- THE PALETTE ----
+     A switcher, not a browser: a small centred card, a light scrim, and a
+     lid that is 62% of the height the DIRECTORY modal takes. In swarm.html
+     #pal is position:fixed;inset:0 — here it is absolute inside #stage so
+     the reader can see it narrow with the viewport. */
+  #pal{position:absolute;inset:0;z-index:30;display:none}
+  #pal.on{display:block}
+  #palscrim{position:absolute;inset:0;background:rgba(16,16,22,.55)}
+  .palcard{
+    position:absolute;left:50%;top:11%;transform:translateX(-50%);
+    width:min(620px,calc(100% - 40px));max-height:74%;
+    background:var(--bg);border:1px solid var(--dim);
+    box-shadow:0 20px 60px rgba(0,0,0,.62);
+    display:flex;flex-direction:column;overflow:hidden;
+    animation:palin .1s ease-out;
+  }
+  @keyframes palin{from{opacity:0;transform:translateX(-50%) translateY(-5px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+  @media (prefers-reduced-motion:reduce){.palcard{animation:none}}
+
+  .palhd{
+    flex:none;display:flex;align-items:center;gap:12px;
+    padding:9px 14px 8px;background:var(--bg2);border-bottom:1px solid var(--line);
+  }
+  .palhd .kick{font-size:9px;letter-spacing:.22em;color:var(--white);font-weight:700}
+  .palhd .n{font-size:9px;letter-spacing:.14em;color:var(--ghost);margin-right:auto}
+  .palhd .n b{color:var(--blue);font-weight:500}
+  .palhd .esc{font-size:8.5px;letter-spacing:.14em;color:var(--ghost);border:1px solid var(--line);padding:2px 6px 3px}
+
+  #palwarn{
+    display:none;flex:none;font-size:9.5px;line-height:1.5;color:var(--yellow);
+    background:rgba(224,175,104,.07);border-bottom:1px solid var(--line);
+    border-left:3px solid var(--yellow);padding:7px 14px;
+  }
+  #palwarn.on{display:block}
+  #palwarn b{color:var(--fg);font-weight:500}
+
+  .palq{flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line)}
+  .palq .caret{flex:none;color:var(--cyan);font-size:15px;line-height:1}
+  #palinput{
+    flex:1;min-width:0;background:transparent;border:none;outline:none;
+    color:var(--fg);font:300 16px/1.4 'JetBrains Mono',ui-monospace,monospace;
+    letter-spacing:.02em;padding:14px 0 15px;
+  }
+  #palinput::placeholder{color:var(--dim);letter-spacing:.06em;font-size:13px}
+
+  #pallist{flex:1;min-height:110px;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+  #palscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+  .palhead{
+    position:sticky;top:0;z-index:2;background:var(--bg);
+    font-size:8.5px;letter-spacing:.2em;color:var(--ghost);
+    padding:9px 14px 5px;border-bottom:1px solid var(--line);
+  }
+  .palhead.none{color:var(--red)}
+  .palrow{
+    display:block;width:100%;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:transparent;border:none;border-left:3px solid transparent;
+    padding:8px 14px 9px 11px;
+  }
+  .palrow .pn{font-size:13.5px}
+  .palrow.here{border-left-color:var(--green)}
+  .palrow.want{border-left-color:var(--cyan)}
+  .palrow:hover{background:var(--panel)}
+  /* the cursor is the loud one: it is where Enter lands */
+  .palrow.cur{background:var(--line);border-left-color:var(--cyan)}
+  .palrow.cur.here{border-left-color:var(--green);box-shadow:inset 3px 0 0 var(--cyan)}
+  .palrow.cur .pm{color:var(--fg)}
+
+  /* WATCH ANOTHER is the last option in the listbox and holds its own floor:
+     reachable by ArrowDown from anywhere, never a filter result, and never out
+     of sight in a list of fifty. Outside the scroller, so it cannot cover a
+     project row the way a sticky footer would. */
+  .palrow.more{
+    flex:none;background:var(--bg2);border-top:1px solid var(--line);
+    border-left:3px solid transparent;
+    font-size:10.5px;letter-spacing:.12em;color:var(--cyan);
+    padding:11px 14px 12px 11px;display:flex;align-items:baseline;gap:9px;
+    flex-wrap:wrap;
+  }
+  .palrow.more .sub{font-size:9px;letter-spacing:.06em;color:var(--ghost);font-weight:300}
+  .palrow.more:hover{background:var(--line)}
+  .palrow.more.cur{background:var(--line);border-left-color:var(--cyan)}
+
+  .palfoot{
+    flex:none;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:7px 14px 8px;background:var(--bg2);border-top:1px solid var(--line);
+    font-size:8.5px;letter-spacing:.14em;color:var(--ghost);
+  }
+  .palfoot .sp{margin-left:auto;color:var(--dim)}
+
+  mark{background:rgba(125,207,255,.16);color:var(--cyan);font-weight:700;padding:0 1px}
+  .palrow.here mark{background:rgba(158,206,106,.16);color:var(--green)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+
+<div class="labhd">
+  <h1>WATCH SELECTOR &nbsp;·&nbsp; DIRECTION A &nbsp;·&nbsp; COMMAND PALETTE</h1>
+  <span class="sub">FIX EVERYTHING OBSERVATORY</span>
+</div>
+
+<div id="bench">
+<div id="benchmain">
+
+  <!-- ===================== THE STAGE (plays the viewport) ===================== -->
+  <div id="stage">
+    <div id="stagehead">
+      <div class="mark">◆</div>
+      <h2>FIX EVERYTHING OBSERVATORY<small>THE SWARM</small></h2>
+      <div class="ctrls">
+        <button type="button" title="[l]">LIVE</button>
+        <button type="button" title="[s]">ALL ARTIFACTS</button>
+      </div>
+    </div>
+
+    <!-- BELOW THRESHOLD -->
+    <nav id="projstrip" aria-label="watched projects"></nav>
+
+    <!-- AT OR ABOVE THRESHOLD -->
+    <nav id="watchbar" aria-label="watched projects">
+      <div class="wbrow">
+        <button type="button" id="wbtrigger"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="pal"></button>
+      </div>
+      <div id="wbwarn"></div>
+    </nav>
+
+    <div id="fakestats">
+      <div class="st"><b>1,204</b><span>OPEN</span></div>
+      <div class="st"><b>318</b><span>AGENTIC</span></div>
+      <div class="st"><b>72%</b><span>CLOSEABLE</span></div>
+      <div class="st"><b>4.2h</b><span>MEDIAN LIFE</span></div>
+    </div>
+    <div id="fakebody">THE SWARM</div>
+
+    <!-- the measuring twin, offscreen, never seen -->
+    <div id="stripghost" aria-hidden="true"></div>
+
+    <!-- ===================== THE PALETTE ===================== -->
+    <div id="pal" role="dialog" aria-modal="true" aria-label="Switch watched project" aria-hidden="true">
+      <div id="palscrim"></div>
+      <div class="palcard">
+        <div class="palhd">
+          <span class="kick">SWITCH PROJECT</span>
+          <span class="n" id="palcount"></span>
+          <span class="esc">ESC</span>
+        </div>
+        <div id="palwarn"></div>
+        <div class="palq">
+          <span class="caret" aria-hidden="true">&#9656;</span>
+          <input id="palinput" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="fuzzy: name or owner &mdash; try  tdel"
+                 role="combobox" aria-expanded="true" aria-controls="pallist"
+                 aria-autocomplete="list" aria-label="Filter watched projects">
+        </div>
+        <!-- The listbox is the whole box; only the project rows scroll. WATCH
+             ANOTHER is a flow sibling pinned outside the scroll region, so it
+             is always the last option and can never sit on top of a row. -->
+        <div id="pallist" role="listbox" aria-label="Watched projects">
+          <div id="palscroll" role="none"></div>
+          <div id="palmore" class="palrow more" role="option" aria-selected="false">
+            <span>＋ WATCH ANOTHER</span>
+            <span class="sub">the observatory directory &mdash; induct any repo on this machine</span>
+          </div>
+        </div>
+        <div class="palfoot">
+          <span>&#8593;&#8595; MOVE</span><span>&#9166; OPEN</span><span>TAB &#8594; WATCH ANOTHER</span>
+          <span class="sp" id="palhint"></span>
+        </div>
+        <span class="sr" id="pallive" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <div id="toast" role="status"></div>
+    <div id="grip" title="drag to resize the viewport"></div>
+  </div>
+
+  <!-- ===================== MEASUREMENT READOUT ===================== -->
+  <div class="panel" style="margin-top:14px">
+    <h3>MEASURED, NOT GUESSED &nbsp;<em id="stateChip"></em></h3>
+    <div id="meter">
+      <div class="row"><span class="k">VIEWPORT</span><span class="v" id="mW"></span></div>
+      <div class="row"><span class="k">THRESHOLD 80%</span><span class="v" id="mT"></span></div>
+      <div class="row"><span class="k">STRIP NATURAL</span><span class="v" id="mN"></span></div>
+      <div class="row"><span class="k">STRIP NEEDS</span><span class="v" id="mR"></span></div>
+      <div class="row"><span class="k">HOLDS HERE</span><span class="v" id="mC"></span></div>
+      <div class="row"><span class="k">RE-EXPAND AT</span><span class="v" id="mH"></span></div>
+      <div id="bar"><div id="barfill"></div><div id="barmark"></div></div>
+      <div id="barcap"><span>0</span><span id="barcapR"></span></div>
+    </div>
+    <!-- Two axes, because the rule has two. Either one crosses the threshold. -->
+    <div class="axes">
+      <div>
+        <label for="wslider">VIEWPORT WIDTH &mdash; <em id="wOut"></em> <span>(or drag the stage edge)</span></label>
+        <input id="wslider" type="range" min="360" max="1800" value="1400">
+      </div>
+      <div>
+        <label for="nslider">PROJECTS WATCHED &mdash; <em id="nOut"></em> <span>(the other way over the line)</span></label>
+        <input id="nslider" type="range" min="2" max="14" value="3">
+      </div>
+    </div>
+    <div class="btnrow">
+      <button type="button" id="bulkBtn">JUMP TO 50 PROJECTS</button>
+      <button type="button" id="mismatchBtn" class="warn">TOGGLE URL MISMATCH</button>
+      <button type="button" id="openBtn">OPEN PALETTE</button>
+      <button type="button" id="resetBtn">RESET</button>
+    </div>
+  </div>
+</div>
+
+<div id="benchside">
+  <div class="panel">
+    <h3>WHAT TO TRY</h3>
+    <div id="legend"><ol>
+      <li>Drag the <b>viewport slider</b> (or the stage's right edge) left. At
+        <b>80%</b> the strip vanishes and one chunky bar takes the row. Watch
+        the numbers under it cross.</li>
+      <li>Now put the width back and drag <b>PROJECTS WATCHED</b> instead
+        (14 are available). Same line, crossed from the other side. Measured:
+        a 1400px window keeps <b>three</b> tabs; nine tabs would want a
+        <b>3,238px</b> one. That is the whole argument for this control.</li>
+      <li>Press <span class="k"><kbd>w</kbd></span> anywhere &mdash; the palette opens in
+        <b>both</b> states, so three-project and fifty-project users keep one
+        muscle memory. <span class="k"><kbd>/</kbd></span> works too.</li>
+      <li>Type <b>tdel</b>. Subsequence, not substring: it finds
+        <b>terminal-delight</b>. So does <b>t-d</b>, <b>parkbrown</b> and
+        <b>delightbrown</b> (name and owner in one query).</li>
+      <li>Open with an empty box: <b>SHOWING NOW</b>, then <b>RECENT</b>, then
+        the rest. The switch you actually want is usually one
+        <span class="k"><kbd>&#8595;</kbd></span> away.</li>
+      <li><span class="k"><kbd>&#8595;</kbd><kbd>&#8593;</kbd></span> move and wrap,
+        <span class="k"><kbd>&#8629;</kbd></span> opens,
+        <span class="k"><kbd>Esc</kbd></span> closes and puts focus back on the bar,
+        <span class="k"><kbd>Tab</kbd></span> jumps straight to WATCH ANOTHER.</li>
+      <li>Type nonsense &mdash; <b>zzz</b>. Every row filters away;
+        <b>&#65291; WATCH ANOTHER</b> stays, because a search that finds nothing
+        is exactly when you want to add one.</li>
+      <li><b>JUMP TO 50 PROJECTS</b>: the palette is the same size, the list
+        scrolls, the sticky add-row holds the floor. Then type &mdash; fifty
+        rows to one in four keystrokes.</li>
+      <li><b>TOGGLE URL MISMATCH</b>: the yellow line welds to the closed bar
+        <em>and</em> rides the palette header &mdash; the warning is never on
+        the surface you just left.</li>
+      <li>Badges survive both states. Narrow the stage hard: the
+        <b>owner truncates, the badge never does</b>.</li>
+    </ol></div>
+  </div>
+  <div class="panel">
+    <h3>KEY MAP &mdash; <em>ADDED TO THE PAGE'S VOCABULARY</em></h3>
+    <div class="keymap" style="font-size:10.5px;line-height:1.9;color:var(--ghost)">
+      <div><kbd>w</kbd> <kbd>/</kbd> &nbsp;switch project &nbsp;<span style="color:var(--dim)">(new)</span></div>
+      <div><kbd>p</kbd> &nbsp;the directory &nbsp;<span style="color:var(--dim)">(unchanged, heavier)</span></div>
+      <div><kbd>l</kbd> &nbsp;live / history &nbsp;<kbd>s</kbd> &nbsp;scope</div>
+      <div style="margin-top:7px;color:var(--ghost);line-height:1.6">While the palette is open it owns the keyboard, so <kbd>l</kbd> and <kbd>s</kbd> type into the box instead of firing.</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+/* ===========================================================================
+   FIXTURES — stand-ins for DIR.projects. Varied name lengths, three owners,
+   every badge state the real strip can produce.
+   =========================================================================== */
+const MIN=6e4, HOUR=36e5, DAY=864e5;
+let SEQ=0;
+function mk(repo,artifacts,age,extra){
+  return Object.assign({
+    slug:repo.split('/')[1], repo, artifacts,
+    fetched_at:age==null?null:new Date(Date.now()-age).toISOString(),
+    seeded:false, mining:false, error:null, _i:SEQ++
+  },extra||{});
+}
+/* Ordered so that trimming the watch list from the end still leaves a varied
+   set: a MINING and a SEED are in the first four, the pending/failed pair
+   lands by nine, the very long names bring up the rear. */
+const POOL=[
+  mk('parker-brown-family/terminal-delight',   12481, 2*MIN),
+  mk('omacom/omarchy',                          8982, 8*MIN,  {mining:true}),
+  mk('parker-brown-family/conclave',            6204, 1.2*HOUR, {seeded:true}),
+  mk('parker-brown-family/apes',               15668, 6*MIN),
+  mk('parker-nothing-nord/lean-ctx',            9340, 33*MIN, {mining:true}),
+  mk('hyprwm/hyprland',                        44190, 3.4*HOUR),
+  mk('parker-brown-family/td-glyph',            5551, 4.3*DAY),
+  mk('parker-nothing-nord/ai-local-engine',     null, null,
+     {_opening:true,_failed:true,error:'git: repository not found'}),
+  mk('ryanatvisgo/ryanatvisgo-intelliscout',    null, null, {_opening:true}),
+  mk('parker-brown-family/markdown-delight',     812, 12*HOUR),
+  mk('parker-brown-family/fix-everything-observatory', 3417, 41*MIN),
+  mk('BROWN-FAMILY-SPORTS-INC/brown-family-sports', 27003, 1.4*DAY),
+  mk('parker-brown-family/omarchy-terminal-delight-theme', 219, 2.1*DAY, {seeded:true}),
+  mk('parker-brown-family/garrison-research-storehouse', 2044, 9*HOUR)
+];
+let PROJ=POOL.slice(0,3);
+const SPARE=['parker-brown-family/decision-brief','omacom/omarchy-shell',
+  'parker-nothing-nord/nord-plates','parker-brown-family/carl-phone-assistant',
+  'hyprwm/hyprpaper','parker-brown-family/tps-report','ryanatvisgo/visgo-web',
+  'parker-brown-family/storehouse-index','omacom/omarchy-themes',
+  'parker-brown-family/chorus','parker-nothing-nord/nord-fit',
+  'parker-brown-family/gstack-intake','hyprwm/hyprlock','parker-brown-family/lymric',
+  'parker-brown-family/race-day','omacom/omarchy-installer',
+  'parker-brown-family/sticky-notes','ryanatvisgo/intelliscout-server',
+  'parker-brown-family/audiobook-hunt','parker-nothing-nord/nord-legacy',
+  'parker-brown-family/observatory-seed','hyprwm/xdg-desktop-portal-hyprland',
+  'parker-brown-family/agent-orient-boot','omacom/omarchy-docs',
+  'parker-brown-family/context-delight','parker-brown-family/followups-rollup',
+  'parker-nothing-nord/nord-cli','parker-brown-family/invoice-kit',
+  'ryanatvisgo/visgo-mobile','parker-brown-family/thread-tie-off',
+  'parker-brown-family/escalate-issue','omacom/omarchy-bin',
+  'parker-brown-family/web-scrape','parker-brown-family/trident',
+  'parker-brown-family/software-factory','parker-brown-family/shoot-staged-terminals'];
+
+/* Live state. `shown` is what the server is rendering (DATA.repo -> slug);
+   `want` is what the URL asked for. They differ only in the mismatch case. */
+const S={ shown:'terminal-delight', want:null, mru:['apes','omarchy','conclave'],
+          collapsed:false, open:false, q:'', cur:0, opts:[], lastFocus:null };
+
+/* ===========================================================================
+   HELPERS lifted verbatim from swarm.html
+   =========================================================================== */
+const $=s=>document.querySelector(s);
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function fmtDur(ms){if(ms==null||!isFinite(ms))return '—';const h=ms/36e5;
+  if(h<1)return Math.round(ms/6e4)+'m';if(h<48)return h.toFixed(1)+'h';return (h/24).toFixed(1)+'d'}
+function fmtRel(ms){return fmtDur(ms)+' ago'}
+function ago(iso){const t=Date.parse(iso);return isFinite(t)?fmtRel(Date.now()-t):'—'}
+const nameOf=p=>p.repo.slice(p.repo.indexOf('/')+1);
+const ownerOf=p=>p.repo.slice(0,p.repo.indexOf('/'));
+
+/* ===========================================================================
+   FUZZY MATCH — subsequence, ranked, with the matched positions returned so
+   the row can highlight them.
+
+   Two passes, because greedy alone highlights the wrong letters. A forward
+   greedy walk finds the EARLIEST feasible end of the match; a backward walk
+   starting from that end pulls every character as late as it can go without
+   crossing its successor. "tdel" against "terminal-delight" greedily marks
+   t-e-...-l scattered across the word; the back-tighten collapses it onto
+   "t" + "del", which is the match a human would have drawn by hand.
+
+   Scored on: how much of the haystack was consumed, contiguous runs, hits
+   landing on a word boundary (start, or after - _ . /), how tight the span
+   is, and how early it starts. Name beats owner, because in a list where
+   twelve rows begin "parker-brown-family/" the owner is the half that carries
+   no information.
+   =========================================================================== */
+const BOUND=/[-_./ ]/;
+function fzy(hay,needle){
+  if(!needle)return {score:0,hit:[]};
+  const H=hay.toLowerCase(), N=needle.toLowerCase(), n=N.length, m=H.length;
+  if(n>m)return null;
+  let j=0,end=-1;
+  for(let i=0;i<m&&j<n;i++) if(H[i]===N[j]){j++;end=i}
+  if(j<n)return null;                       // not a subsequence at all
+  const hit=new Array(n);
+  let lim=end;
+  for(let k=n-1;k>=0;k--){                  // back-tighten from the earliest end
+    let i=lim;
+    while(i>=0&&H[i]!==N[k])i--;
+    hit[k]=i;lim=i-1;
+  }
+  let contig=0,bound=0;
+  for(let k=0;k<n;k++){
+    if(k&&hit[k]===hit[k-1]+1)contig++;
+    const i=hit[k];
+    if(i===0||BOUND.test(H[i-1]))bound++;
+  }
+  const span=hit[n-1]-hit[0]+1;
+  const score=n*12 + contig*11 + bound*9 - span*1.6 - hit[0]*0.7 - (m-n)*0.08;
+  return {score,hit};
+}
+/* Match against three haystacks: the name, the owner, and the two joined so a
+   query can span both ("delightbrown"). Whichever scores best wins, and its
+   hits are split back onto the field they belong to. */
+function score(p,q){
+  if(!q)return {score:0,nh:[],oh:[]};
+  const nm=nameOf(p), ow=ownerOf(p);
+  const a=fzy(nm,q), b=fzy(ow,q), c=fzy(nm+ow,q);
+  let best=null;
+  if(a) best={score:a.score+34,nh:a.hit,oh:[]};
+  if(b&&(!best||b.score+2>best.score)) best={score:b.score+2,nh:[],oh:b.hit};
+  if(c){
+    const spans=c.hit.some(i=>i<nm.length)&&c.hit.some(i=>i>=nm.length);
+    const s=c.score+(spans?14:0);
+    if(!best||s>best.score)
+      best={score:s,nh:c.hit.filter(i=>i<nm.length),oh:c.hit.filter(i=>i>=nm.length).map(i=>i-nm.length)};
+  }
+  return best;
+}
+/* wrap the matched runs; everything else is escaped normally */
+function markUp(text,hits){
+  if(!hits||!hits.length)return esc(text);
+  const on=new Set(hits);let out='',run=false;
+  for(let i=0;i<text.length;i++){
+    const h=on.has(i);
+    if(h&&!run){out+='<mark>';run=true}
+    if(!h&&run){out+='</mark>';run=false}
+    out+=esc(text[i]);
+  }
+  return out+(run?'</mark>':'');
+}
+/* name-first, owner trailing — the same order the directory and strip use */
+function nwoHtml(p,m){
+  return '<b>'+markUp(nameOf(p),m&&m.nh)+'</b> <i>'+markUp(ownerOf(p),m&&m.oh)+'</i>';
+}
+
+/* ===========================================================================
+   BADGES + META — one source, so the strip, the closed bar and every palette
+   row cannot drift apart. A badge is NEVER truncated: .pnt owns the ellipsis,
+   badges sit outside it with flex:none.
+   =========================================================================== */
+/* OPENING is a claim of progress; when the first mine is on record as having
+   failed and no manifest exists, the claim is false and MINE FAILED replaces
+   it. `_opening` / `_failed` are demo stand-ins for the live pending path
+   (slug === want && nothing shown yet), which cannot be staged on a page with
+   no server behind it. */
+function badges(p){
+  const pending=(p.slug===S.want&&S.shown===null)||!!p._opening;
+  const failed=(pending&&p.error&&p.artifacts==null)||!!p._failed;
+  return (p.seeded?'<span class="dbadge seed">SEED</span>':'')
+       + (p.mining?'<span class="dbadge mining">MINING</span>':'')
+       + (failed?'<span class="dbadge fail">MINE FAILED</span>'
+          :pending?'<span class="dbadge mining">OPENING</span>':'');
+}
+/* null artifacts is a project nobody has mined, never an empty one — the same
+   hatched badge the directory uses, and it sits in the meta line because it
+   REPLACES the count rather than annotating the name. */
+function meta(p){
+  const lead=p.artifacts==null?'<span class="dbadge unmined">NOT MINED</span>':'';
+  const bits=[];
+  if(p.artifacts!=null)bits.push('<b>'+p.artifacts.toLocaleString()+'</b> artifacts');
+  if(p.fetched_at)bits.push(ago(p.fetched_at));
+  else if(p.artifacts==null)bits.push('no manifest on disk');
+  if(p.error)bits.push('<span style="color:var(--red)">'+esc(p.error)+'</span>');
+  return lead+'<span class="pmt">'+bits.join(' · ')+'</span>';
+}
+function mismatchHtml(){
+  if(!(S.want&&S.shown&&S.want!==S.shown))return '';
+  return 'the URL asked for <b>'+esc(S.want)+'</b> — the server is showing <b>'
+       + esc(S.shown)+'</b> instead. Pick it below to repair the link.';
+}
+
+/* ===========================================================================
+   THE STRIP (below threshold) + THE GHOST (always)
+
+   HOW NATURAL WIDTH IS MEASURED WITHOUT THRASHING LAYOUT
+   -----------------------------------------------------
+   The naive version reads scrollWidth off the live strip. That fails twice:
+   scrollWidth drops the container's trailing padding in a flex overflow box,
+   and once the strip is collapsed to display:none it has no width at all, so
+   the control can collapse but can never decide to come back.
+
+   So the strip is rendered TWICE. #stripghost is an offscreen twin at
+   width:max-content, visibility:hidden (still laid out, unlike display:none),
+   carrying the same padding and gap. Its border-box width IS the strip's
+   natural width, and it exists whichever state the control is in.
+
+   Nothing ever calls getBoundingClientRect() in response to an event. Two
+   ResizeObservers do all the reading, off layout the browser had already
+   computed:
+     - one on #stripghost  -> natural width. It fires for every reason the
+       number can change: a project added or removed, a badge appearing, and
+       (the one everybody forgets) JetBrains Mono finishing its download and
+       re-measuring every tab.
+     - one on the viewport -> available width.
+   Both write to a variable and schedule decide() on the next frame, so a drag
+   that fires forty resize events costs one comparison per frame and zero
+   forced reflows. There is no read-after-write anywhere in the path.
+
+   No feedback loop is possible: the ghost is max-content, so its width does
+   not depend on the container's. A 10px deadband is still applied so a slow
+   drag parked on the boundary cannot strobe.
+   =========================================================================== */
+function stripHtml(){
+  /* The ghost gets the note too: it is part of the row, so it is part of the
+     natural width. Measuring a strip narrower than the one that will be drawn
+     is how a control collapses one project too late. */
+  const note=mismatchHtml();
+  return '<span class="plabel">WATCHING</span>'
+    + (note?'<span class="pnote">'+note+'</span>':'')
+    + PROJ.map(p=>{
+        const pending=p.slug===S.want&&S.shown===null;
+        return '<button type="button" class="ptab'+(p.slug===S.shown?' here':'')
+          +(pending?' want':'')+'" data-slug="'+esc(p.slug)+'" title="'+esc(p.repo)+'">'
+          +'<span class="pn"><span class="pnt">'+nwoHtml(p)+'</span>'+badges(p)+'</span>'
+          +'<span class="pm">'+meta(p)+'</span></button>';
+      }).join('')
+    + '<button type="button" class="pmore">＋ WATCH ANOTHER</button>';
+}
+
+/* ===========================================================================
+   THE CLOSED BAR (at or above threshold)
+   Chunky, and it says which project by name: repo, owner, artifact count,
+   relative time, badges. Never "3 projects".
+   =========================================================================== */
+function renderBar(){
+  const p=PROJ.find(x=>x.slug===S.shown);
+  const t=$('#wbtrigger');
+  if(!p){
+    t.innerHTML='<span class="wbl">SHOWING</span><span class="wbmain"><span class="pn">'
+      +'<span class="pnt"><b>—</b></span></span><span class="pm">nothing open</span></span>';
+  }else{
+    t.innerHTML='<span class="wbl">SHOWING</span>'
+      +'<span class="wbmain">'
+        +'<span class="pn"><span class="pnt">'+nwoHtml(p)+'</span>'+badges(p)+'</span>'
+        +'<span class="pm">'+meta(p)+'</span>'
+      +'</span>'
+      +'<span class="wbcount"><b>'+PROJ.length+'</b> WATCHED</span>'
+      +'<span class="wbkey"><span class="lbl">SWITCH </span><kbd>w</kbd> <span class="caret">▾</span></span>';
+    t.title=p.repo+' — showing now. Press w to switch.';
+  }
+  const w=mismatchHtml();
+  $('#wbwarn').className=w?'on':'';
+  $('#wbwarn').innerHTML=w;
+}
+
+/* ===========================================================================
+   THE PALETTE
+   =========================================================================== */
+function palModel(){
+  const q=S.q.replace(/\s+/g,'');
+  const out=[];
+  if(!q){
+    /* Before a query: current, then recents, then everything. Someone who
+       watches fifteen projects is nearly always going back to one of four. */
+    const shown=PROJ.find(p=>p.slug===S.shown);
+    if(shown){out.push({head:'SHOWING NOW'});out.push({p:shown});}
+    const rec=S.mru.filter(s=>s!==S.shown).map(s=>PROJ.find(p=>p.slug===s))
+                   .filter(Boolean).slice(0,3);
+    if(rec.length){out.push({head:'RECENT'});rec.forEach(p=>out.push({p}));}
+    const seen=new Set([S.shown].concat(rec.map(p=>p.slug)));
+    const rest=PROJ.filter(p=>!seen.has(p.slug));
+    if(rest.length){
+      out.push({head:'ALL WATCHED · '+rest.length});
+      rest.forEach(p=>out.push({p}));
+    }
+  }else{
+    const hits=PROJ.map(p=>({p,m:score(p,q)})).filter(x=>x.m)
+                   .sort((a,b)=>b.m.score-a.m.score||a.p._i-b.p._i);
+    out.push(hits.length
+      ? {head:hits.length+' OF '+PROJ.length+' MATCH · '+esc(q)}
+      : {head:'NOTHING MATCHES "'+esc(q)+'"',none:true});
+    hits.forEach(x=>out.push({p:x.p,m:x.m}));
+  }
+  return out;
+}
+function renderPal(){
+  const model=palModel();
+  S.opts=[];
+  let html='';
+  for(const row of model){
+    if(row.head){html+='<div class="palhead'+(row.none?' none':'')+'" role="presentation">'+row.head+'</div>';continue}
+    const p=row.p, i=S.opts.length;
+    S.opts.push({slug:p.slug});
+    const pending=p.slug===S.want&&S.shown===null;
+    html+='<div class="palrow'+(p.slug===S.shown?' here':'')+(pending?' want':'')
+      +'" role="option" id="palopt-'+i+'" data-i="'+i+'"'
+      +' aria-selected="false" title="'+esc(p.repo)+'">'
+      +'<span class="pn"><span class="pnt">'+nwoHtml(p,row.m)+'</span>'+badges(p)+'</span>'
+      +'<span class="pm">'+meta(p)+'</span></div>';
+  }
+  $('#palscroll').innerHTML=html;
+  /* WATCH ANOTHER: always the last option, whatever the filter did */
+  const mi=S.opts.length;
+  S.opts.push({more:true});
+  $('#palmore').dataset.i=mi;
+
+  if(S.cur>=S.opts.length)S.cur=S.opts.length-1;
+  if(S.cur<0)S.cur=0;
+  syncCur();
+
+  $('#palcount').innerHTML='<b>'+PROJ.length+'</b> WATCHED';
+  const w=mismatchHtml();
+  $('#palwarn').className=w?'on':'';
+  $('#palwarn').innerHTML=w;
+  /* the add-row is an option but not a match — announce matches, not options */
+  const n=S.opts.length-1;
+  $('#pallive').textContent=S.q?(n+' project'+(n===1?'':'s')+' match '+S.q):'';
+}
+function syncCur(){
+  for(const el of $('#pallist').querySelectorAll('.palrow')){
+    const on=+el.dataset.i===S.cur;
+    el.classList.toggle('cur',on);
+    el.setAttribute('aria-selected',on?'true':'false');
+    if(on){
+      $('#palinput').setAttribute('aria-activedescendant',el.id);
+      /* 'nearest' scrolls the least: an already-visible row does not jump */
+      if(el.parentNode===$('#palscroll'))el.scrollIntoView({block:'nearest'});
+    }
+  }
+  $('#palhint').textContent=(S.cur+1)+' / '+S.opts.length;
+}
+function move(d){
+  if(!S.opts.length)return;
+  S.cur=(S.cur+d+S.opts.length)%S.opts.length;      // wraps: fifty rows, two keys
+  syncCur();
+}
+function openPal(){
+  if(S.open)return;
+  S.open=true;S.lastFocus=document.activeElement;
+  S.q='';S.cur=0;
+  $('#palinput').value='';
+  $('#pal').classList.add('on');
+  $('#pal').setAttribute('aria-hidden','false');
+  $('#wbtrigger').setAttribute('aria-expanded','true');
+  renderPal();
+  $('#palinput').focus();
+}
+function closePal(){
+  if(!S.open)return;
+  S.open=false;
+  $('#pal').classList.remove('on');
+  $('#pal').setAttribute('aria-hidden','true');
+  $('#wbtrigger').setAttribute('aria-expanded','false');
+  /* focus goes back where it came from — the bar if it is the live control,
+     otherwise whatever had it. Never the body. */
+  const back=S.lastFocus&&document.contains(S.lastFocus)?S.lastFocus
+           :(S.collapsed?$('#wbtrigger'):$('#projstrip .ptab.here')||$('#wbtrigger'));
+  if(back&&back.focus)back.focus();
+}
+function choose(i){
+  const o=S.opts[i];
+  if(!o)return;
+  if(o.more){closePal();toast('the observatory directory would open here — [p] in the real page');return}
+  if(o.slug!==S.shown){
+    S.mru=[S.shown].concat(S.mru.filter(s=>s!==S.shown&&s!==o.slug)).filter(Boolean).slice(0,6);
+    S.shown=o.slug;
+    S.want=null;                    // picking a project repairs the URL
+  }
+  closePal();
+  renderAll();
+  toast('switched to '+o.slug);
+}
+
+/* ===========================================================================
+   KEYBOARD
+   Page level: w or / opens (in EITHER state). While the palette is open it
+   owns the keyboard outright, the way the directory does, so l / s / space
+   type into the box instead of firing the transport.
+   =========================================================================== */
+document.addEventListener('keydown',e=>{
+  if(S.open)return;
+  const t=e.target;
+  if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))return;
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.key==='w'||e.key==='/'){e.preventDefault();openPal();}
+});
+$('#palinput').addEventListener('input',e=>{S.q=e.target.value;S.cur=0;renderPal()});
+$('#palinput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'){e.preventDefault();move(1)}
+  else if(e.key==='ArrowUp'){e.preventDefault();move(-1)}
+  else if(e.key==='Home'){e.preventDefault();S.cur=0;syncCur()}
+  else if(e.key==='End'){e.preventDefault();S.cur=S.opts.length-1;syncCur()}
+  else if(e.key==='Enter'){e.preventDefault();choose(S.cur)}
+  else if(e.key==='Escape'){e.preventDefault();closePal()}
+  else if(e.key==='Tab'&&!e.shiftKey){
+    /* Tab is a shortcut, not an escape: it parks on WATCH ANOTHER, which is
+       the only other thing in the card worth reaching. The card is modal, so
+       focus cannot leave it. */
+    e.preventDefault();S.cur=S.opts.length-1;syncCur();
+  }else if(e.key==='Tab'&&e.shiftKey){e.preventDefault();S.cur=0;syncCur()}
+});
+$('#pallist').addEventListener('mousemove',e=>{
+  const r=e.target.closest('.palrow');
+  if(r&&+r.dataset.i!==S.cur){S.cur=+r.dataset.i;syncCur()}
+});
+$('#pallist').addEventListener('click',e=>{
+  const r=e.target.closest('.palrow');
+  if(r)choose(+r.dataset.i);
+});
+$('#palscrim').addEventListener('click',closePal);
+$('#wbtrigger').addEventListener('click',openPal);
+$('#wbtrigger').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();openPal()}
+});
+
+/* ===========================================================================
+   THE THRESHOLD MACHINERY
+   =========================================================================== */
+const STAGE=$('#stage'), GHOST=$('#stripghost'), STRIP=$('#projstrip'), BAR=$('#watchbar');
+const RATIO=0.80, DEAD=10, GAP=7;
+let natural=0, avail=0, frame=0;
+
+/* In swarm.html this is window.innerWidth. Here it is the stage, so the
+   reader can drive the comparison by hand. */
+function viewportW(){return avail}
+
+function schedule(){
+  if(frame)return;
+  frame=requestAnimationFrame(()=>{frame=0;decide()});
+}
+function decide(){
+  const limit=RATIO*viewportW();
+  /* deadband: collapse at the threshold, re-expand 10px below it, so a drag
+     parked on the boundary cannot strobe */
+  const want=S.collapsed ? natural>=limit-DEAD : natural>=limit;
+  if(want!==S.collapsed){
+    S.collapsed=want;
+    STRIP.classList.toggle('on',!want);
+    BAR.classList.toggle('on',want);
+  }
+  BAR.classList.toggle('tight',viewportW()<560);
+  paintMeter(limit);
+}
+
+/* natural width, from the offscreen twin */
+let tabW=[], fixedW=0;
+new ResizeObserver(es=>{
+  const e=es[0];
+  const b=e.borderBoxSize&&e.borderBoxSize[0];
+  /* contentRect is CONTENT box — it would silently drop the strip's 28px of
+     horizontal padding. borderBoxSize is the number we actually want. */
+  natural=Math.ceil(b?b.inlineSize:(e.contentRect.width+28));
+  /* Per-tab widths, read HERE and nowhere else. A ResizeObserver callback runs
+     after layout and before paint, so offsetWidth is free here; the same read
+     from a click handler would force a synchronous reflow. Cached for the
+     capacity line, which is otherwise unaffordable. */
+  tabW=[];let sum=0;
+  for(const k of GHOST.children)
+    if(k.classList.contains('ptab')){tabW.push(k.offsetWidth);sum+=k.offsetWidth}
+  fixedW=natural-sum-GAP*tabW.length;      // label + add button + padding
+  schedule();
+}).observe(GHOST,{box:'border-box'});
+
+/* available width. In swarm.html: window.addEventListener('resize', schedule)
+   with avail = innerWidth. */
+new ResizeObserver(es=>{
+  const e=es[0];
+  const b=e.contentBoxSize&&e.contentBoxSize[0];
+  avail=Math.round(b?b.inlineSize:e.contentRect.width);
+  schedule();
+}).observe(STAGE,{box:'content-box'});
+window.addEventListener('resize',schedule);
+
+/* Webfont arrival changes every tab's width. The ghost's ResizeObserver
+   catches it on its own — this is belt and braces for engines that batch. */
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(schedule);
+
+function paintMeter(limit){
+  $('#mW').innerHTML='<b>'+viewportW()+'</b> px';
+  $('#mT').innerHTML='0.80 × '+viewportW()+' = <b>'+Math.round(limit)+'</b> px';
+  $('#mN').innerHTML='<b>'+natural+'</b> px · '+PROJ.length+' tabs + WATCH ANOTHER';
+  $('#mR').innerHTML='a <b>'+Math.ceil(natural/RATIO)+'</b> px viewport to stay a strip';
+  /* how many of THESE tabs the current viewport would keep */
+  let k=0,run=fixedW;
+  while(k<tabW.length&&run+tabW[k]+GAP<=limit){run+=tabW[k]+GAP;k++}
+  $('#mC').innerHTML='<b>'+k+'</b> of '+PROJ.length+' tabs fit under the line';
+  $('#mH').innerHTML='<b>'+Math.round(limit-DEAD)+'</b> px &nbsp;<span style="color:var(--ghost)">(10px deadband)</span>';
+  const full=Math.max(natural,viewportW(),1);
+  $('#barfill').style.width=(100*Math.min(1,natural/full))+'%';
+  $('#barfill').className=S.collapsed?'over':'';
+  $('#barmark').style.left=(100*Math.min(1,limit/full))+'%';
+  $('#barcapR').textContent=Math.round(full)+' px';
+  const chip=$('#stateChip');
+  chip.className='state '+(S.collapsed?'pal':'strip');
+  chip.textContent=S.collapsed?'COLLAPSED → PALETTE':'STRIP';
+}
+
+/* ===========================================================================
+   RENDER + DEMO WIRING
+   =========================================================================== */
+function renderAll(){
+  /* One watched project is not a choice — the row does not exist at all,
+     the rule the strip already follows. */
+  if(PROJ.length<2){STRIP.classList.remove('on');BAR.classList.remove('on');GHOST.innerHTML='';return}
+  STRIP.innerHTML=stripHtml();
+  GHOST.innerHTML=stripHtml();           // the twin, measured, never seen
+  for(const b of STRIP.querySelectorAll('.ptab'))
+    b.onclick=()=>{if(b.dataset.slug!==S.shown){
+      S.mru=[S.shown].concat(S.mru.filter(s=>s!==S.shown)).filter(Boolean).slice(0,6);
+      S.shown=b.dataset.slug;S.want=null;renderAll();toast('switched to '+S.shown);}};
+  STRIP.querySelector('.pmore').onclick=()=>toast('the observatory directory would open here — [p] in the real page');
+  renderBar();
+  if(S.open)renderPal();
+  schedule();                            // the list changed: re-decide
+}
+
+let toastT=0;
+function toast(msg){
+  const t=$('#toast');t.textContent=msg;t.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),1700);
+}
+
+$('#wslider').addEventListener('input',e=>{
+  STAGE.style.width=e.target.value+'px';   // the stage's ResizeObserver picks it up
+  $('#wOut').textContent=e.target.value+' px';
+});
+function setCount(n){
+  PROJ=POOL.slice(0,n);
+  /* a project can be unwatched out from under the instrument; the shown one
+     falls back to the first, the way the server's active project would */
+  if(!PROJ.some(p=>p.slug===S.shown))S.shown=PROJ[0].slug;
+  S.mru=S.mru.filter(s=>PROJ.some(p=>p.slug===s));
+  $('#nOut').textContent=n+' of '+POOL.length;
+  $('#nslider').value=n;
+  renderAll();
+}
+$('#nslider').addEventListener('input',e=>setCount(+e.target.value));
+$('#bulkBtn').onclick=()=>{
+  PROJ=POOL.concat(SPARE.slice(0,36).map(nwo=>
+    mk(nwo,Math.floor(200+Math.random()*30000),Math.random()*3*DAY)));
+  $('#nOut').textContent=PROJ.length+' (all + spares)';
+  renderAll();toast(PROJ.length+' projects watched — open the palette');
+};
+$('#mismatchBtn').onclick=()=>{S.want=S.want?null:'ai-local-engine';renderAll()};
+$('#openBtn').onclick=openPal;
+$('#resetBtn').onclick=()=>{
+  S.shown='terminal-delight';S.want=null;S.mru=['apes','omarchy','conclave'];
+  $('#wslider').value=1400;STAGE.style.width='1400px';$('#wOut').textContent='1400 px';
+  $('#nslider').value=3;setCount(3);
+};
+
+/* drag the stage's right edge */
+(function(){
+  const g=$('#grip');let x0=0,w0=0,on=false;
+  g.addEventListener('pointerdown',e=>{
+    on=true;x0=e.clientX;w0=STAGE.clientWidth;g.classList.add('dragging');
+    g.setPointerCapture(e.pointerId);e.preventDefault();
+  });
+  g.addEventListener('pointermove',e=>{
+    if(!on)return;
+    const w=Math.max(360,Math.min(1800,w0+(e.clientX-x0)));
+    STAGE.style.width=w+'px';$('#wslider').value=w;$('#wOut').textContent=w+' px';
+  });
+  const end=()=>{on=false;g.classList.remove('dragging')};
+  g.addEventListener('pointerup',end);g.addEventListener('pointercancel',end);
+})();
+
+$('#wOut').textContent='1400 px';
+$('#nOut').textContent='3 of 14';
+renderAll();
+</script>
+</body>
+</html>
