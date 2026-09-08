@@ -25,7 +25,7 @@
   body{
     background:var(--bg); color:var(--blue);
     font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:300;
-    height:100vh; display:grid; grid-template-rows:auto auto 1fr auto; overflow:hidden;
+    height:100vh; display:grid; grid-template-rows:auto auto auto 1fr auto; overflow:hidden;
     /* the implicit auto column is min-content floored, so one long footer row
        could push the whole page wider than the window; pin it to the window. */
     grid-template-columns:minmax(0,1fr);
@@ -183,6 +183,39 @@
   }
   #tip .t2{color:var(--ghost)}
 
+  /* ===== the project strip: every watched repository, one tab each =====
+     The selector nobody has to discover. It exists only when there is a
+     choice to make — two or more watched projects — and then it is a
+     full-width row of tabs: what the observatory watches, which one the
+     instrument is showing, one click to point it elsewhere. The directory
+     behind [p] stays the deep surface (induction, roots, the check
+     battery); this strip is the everyday one. */
+  #projstrip{display:flex;align-items:stretch;gap:7px;background:var(--bg2);overflow-x:auto}
+  #projstrip.on{padding:8px 14px;border-bottom:1px solid var(--line)}
+  .plabel{align-self:center;flex:none;font-size:9px;letter-spacing:.22em;color:var(--ghost);margin-right:5px}
+  .ptab{
+    flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dim);
+    padding:7px 14px 8px;max-width:340px;
+  }
+  .ptab:hover{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .ptab.here{border-left-color:var(--green);background:var(--line)}
+  .ptab.want{border-left-color:var(--cyan)}
+  /* badges sit OUTSIDE the ellipsis: a long owner may truncate, a status
+     (MINING, SEED, NOT MINED) may not — the owner is the half of the name
+     that carries no information, the badge is the half that does. */
+  .ptab .pn{display:flex;align-items:baseline;gap:6px;font-size:13px}
+  .ptab .pn .pnt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .ptab .pn .dbadge{flex:none;margin-left:0}
+  .ptab .pn b{color:var(--white);font-weight:700}
+  .ptab .pn i{color:var(--ghost);font-style:normal;font-size:10px;letter-spacing:.04em}
+  .ptab.here .pn b{color:var(--green)}
+  .ptab .pm{display:block;font-size:9.5px;color:var(--ghost);margin-top:2.5px;white-space:nowrap}
+  .ptab .pm b{color:var(--blue);font-weight:500}
+  .pmore{flex:none;align-self:center;font-size:10px;letter-spacing:.1em;border-style:dashed;padding:8px 12px}
+  .pnote{align-self:center;flex:none;font-size:9.5px;color:var(--yellow);max-width:300px;white-space:normal;line-height:1.4}
+  .pnote b{color:var(--fg);font-weight:500}
+
   /* ===== the observatory directory: what is watched, what is on this machine,
      and whether a candidate can honestly be watched at all ===== */
   #dirBtn{
@@ -263,6 +296,7 @@
   .dbadge.seed{border-color:var(--yellow);color:var(--yellow)}
   .dbadge.mining{border-color:var(--cyan);color:var(--cyan)}
   .dbadge.watched{border-color:var(--green);color:var(--green)}
+  .dbadge.fail{border-color:var(--red);color:var(--red)}
   /* a project with no manifest is UNMINED, not empty — same hatch the swarm
      uses for an artifact nobody scored, so the two read as the one idea */
   .dbadge.unmined{
@@ -329,6 +363,7 @@
     <button id="scopeBtn" title="[s] cycle attribution scope">ALL ARTIFACTS</button>
   </div>
 </header>
+<nav id="projstrip" aria-label="watched projects"></nav>
 <div id="statsbar"></div>
 <main>
   <div id="stage">
@@ -582,6 +617,7 @@ function loadManifest(first){
       for(const it of DATA.stream)if(it.t>lastLiveT)lastLiveT=it.t;   // no spread: 34k args is RangeError territory
       if(first||atEnd)T=DATA.t1;
       refresh();
+      renderStrip();   // the lit tab follows what actually arrived
     }
     s.remove();
   };
@@ -673,11 +709,26 @@ function syncOverlay(){
     // whether it is queued or running, and whether it failed. Saying "the
     // miner hasn't run" over the top of that would be both stale and vaguer.
     if(awaitingFirstMine)return;
-    html=`<b style="color:var(--yellow)">no manifest yet</b><br>
-    the miner hasn't run — <code>fix-everything-observatory mine</code> builds
-    one from GitHub. ${LOCAL_API?'Or press <b>p</b> to point this observatory at '
-      +'any repository on this machine.':''} Or watch a synthetic healing arc.
-    <div class="obtns"><button id="obSim">SIMULATE HISTORY</button></div>`;
+    // A recorded failure outranks the generic copy. "Nobody ran the miner"
+    // and "the miner ran and failed" are different findings; when the
+    // registry already holds the second, saying the first sends the reader
+    // off to run the exact command that just failed and buries the one
+    // fact that would help. Reached on a plain page load of a failed
+    // project — the mine watcher only covers switches made in this tab.
+    const want=PROJECT||DIR.active;
+    const p=DIR.projects.find(x=>x.slug===want);
+    if(p&&p.error&&p.artifacts==null){
+      html=`<b style="color:var(--red)">the first mine failed</b><br>
+      <code>${esc(p.error)}</code><br>Nothing was written — ${esc(p.repo)} has
+      no picture yet, which is not the same as an empty repository. Fix what
+      the error names${LOCAL_API?', or press <b>p</b> to point the observatory somewhere else':''}.`;
+    } else {
+      html=`<b style="color:var(--yellow)">no manifest yet</b><br>
+      the miner hasn't run — <code>fix-everything-observatory mine</code> builds
+      one from GitHub. ${LOCAL_API?'Or press <b>p</b> to point this observatory at '
+        +'any repository on this machine.':''} Or watch a synthetic healing arc.
+      <div class="obtns"><button id="obSim">SIMULATE HISTORY</button></div>`;
+    }
   } else {
     const markerN=d.artifacts.filter(a=>a.attribution==='marker').length;
     if(!SIM&&scopeKey()==='marker'&&markerN===0){
@@ -1352,7 +1403,9 @@ function closeDir(){
 function refreshDir(){
   return api('/api/projects').then(d=>{
     DIR.projects=d.projects||[];DIR.roots=d.roots||[];DIR.active=d.active;
-    renderDir();
+    // syncOverlay too: the failed-first-mine overlay reads the registry,
+    // which has usually not answered yet the first time refresh() runs.
+    renderDir();renderStrip();syncOverlay();
   }).catch(()=>{});
 }
 function loadScan(force){
@@ -1527,6 +1580,7 @@ function switchTo(slug){
   SPRITES.clear();clearTweens();AGG=null;$('#feed').innerHTML='';
   if(SIM)setSim(false);
   $('#repoName').textContent='…';
+  renderStrip();
   closeDir();
   loadManifest(true);
   waitForFirstMine(slug);
@@ -1542,7 +1596,9 @@ function waitForFirstMine(slug){
   const tick=()=>{
     if(DATA||PROJECT!==slug){awaitingFirstMine=false;return}
     api('/api/projects').then(d=>{
-      const p=(d.projects||[]).find(x=>x.slug===slug);
+      DIR.projects=d.projects||[];DIR.active=d.active;
+      renderStrip();   // MINING appears on the tab while the first pass runs
+      const p=DIR.projects.find(x=>x.slug===slug);
       if(!p||PROJECT!==slug)return;
       const ov=$('#overlay');
       ov.style.display='block';
@@ -1605,6 +1661,73 @@ function addRoot(){
   });
 }
 
+/* ================= the project strip =================
+   The everyday selector, sitting above the stats bar whenever the
+   observatory watches two or more projects. The directory answers "what
+   could be watched"; this answers the question a returning user actually
+   has — "which of my watched projects am I looking at, and how do I look
+   at another one" — without a keypress to discover or a panel to open. */
+
+/* What the instrument is SHOWING, read off the data that arrived. The
+   server answers an unknown or stale ?project= with its ACTIVE project
+   rather than an error (measured: a bogus slug returns 200 carrying the
+   active repository), so the URL is a request, not a fact. Matching tabs
+   on DATA.repo is what keeps the lit tab honest — the same rule
+   #repoName has always followed by rendering d.repo, never the slug.
+   And repo, not the manifest's own slug field, is load-bearing a second
+   way: the committed seed was frozen before slug existed, so on a fresh
+   install DATA.slug is undefined until the first mine lands. repo is the
+   one key present in both, and the same asymmetry returns any time a
+   manifest field is added after a seed is frozen. */
+function shownSlug(){
+  if(!DATA)return null;
+  const p=DIR.projects.find(x=>x.repo===DATA.repo);
+  return p?p.slug:null;
+}
+function renderStrip(){
+  const el=$('#projstrip'), ps=DIR.projects;
+  // One watched project is not a choice; the strip earns its row only
+  // when there is switching to do. Header name and [p] remain either way.
+  if(!LOCAL_API||ps.length<2){el.className='';el.innerHTML='';return}
+  const have=shownSlug(), want=PROJECT;
+  el.className='on';
+  // The mismatch warning leads the strip rather than trailing it: with
+  // enough tabs the strip scrolls, and a warning parked past the scroll
+  // edge is invisible exactly when it applies.
+  el.innerHTML=`<span class="plabel">WATCHING</span>`
+  +(want&&have&&want!==have
+    ?`<span class="pnote" title="an unknown or stale project in the URL resolves to the server's active project rather than an error — the tabs are live, so picking one repairs the link">the URL asked for <b>${esc(want)}</b> — showing the active project instead</span>`:'')
+  +ps.map(p=>{
+    // null artifacts is a project nobody has mined, never an empty one —
+    // the same hatch badge the directory uses, for the same reason.
+    const count=p.artifacts==null
+      ?'<span class="dbadge unmined">NOT MINED</span>'
+      :`<b>${p.artifacts.toLocaleString()}</b> artifacts`;
+    const bits=[count];
+    if(p.fetched_at)bits.push(ago(p.fetched_at));
+    const pending=p.slug===want&&have===null;
+    // OPENING is a claim of progress. When the server has recorded a
+    // failed first mine and no manifest exists, the claim is false — the
+    // overlay says "the first mine failed" and the badge must not sit
+    // beside it saying otherwise. A stale error on a project that HAS a
+    // manifest is not this case: the tab shows its data normally.
+    const failed=pending&&p.error&&p.artifacts==null;
+    return `<button class="ptab${p.slug===have?' here':''}${pending?' want':''}"
+      data-slug="${esc(p.slug)}" title="${esc(p.repo)}${p.slug===have?' — showing now':''}${
+        failed?' — first mine failed: '+esc(p.error):''}">
+      <span class="pn"><span class="pnt">${nwoHtml(p.repo)}</span>${
+        p.seeded?'<span class="dbadge seed">SEED</span>':''}${
+        p.mining?'<span class="dbadge mining">MINING</span>':''}${
+        failed?'<span class="dbadge fail">MINE FAILED</span>':
+        pending?'<span class="dbadge mining">OPENING</span>':''}</span>
+      <span class="pm">${bits.join(' · ')}</span></button>`;
+  }).join('')
+  +`<button class="pmore" title="[p] the observatory directory — induct any repository on this machine">＋ WATCH ANOTHER</button>`;
+  for(const b of el.querySelectorAll('.ptab'))
+    b.onclick=()=>{if(b.dataset.slug!==have)switchTo(b.dataset.slug)};
+  el.querySelector('.pmore').onclick=openDir;
+}
+
 $('#dirBtn').onclick=openDir;
 $('#dclose').onclick=closeDir;
 $('#dadd').onclick=addRoot;
@@ -1648,7 +1771,11 @@ if(!LOCAL_API){
   $('#dirBtn').style.borderBottomStyle='none';
   $('#dirBtn').style.cursor='default';
 }else refreshDir();
-setInterval(()=>{if(!SIM)loadManifest(false)},45000);
+setInterval(()=>{
+  if(!SIM)loadManifest(false);
+  // counts, badges, and projects another tab or the bar widget inducted
+  if(LOCAL_API)refreshDir();
+},45000);
 requestAnimationFrame(draw);
 </script>
 </body>
