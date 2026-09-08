@@ -14,10 +14,12 @@ import qs.Ui
 
 // Fix-Everything Observatory — the swarm chip, and the picker behind it.
 //
-// One glyph in the bar. LEFT-CLICK opens the observatory on whatever it is
-// currently watching. RIGHT-CLICK opens this tray, which is the answer to
-// "watching WHAT?" — a search field over every repository this machine has,
-// watched or not, plus the button that widens where it looks.
+// One glyph in the bar. LEFT-CLICK opens the observatory on omarchy — the
+// repository this program was built to watch — whatever was on screen last
+// time; a search result from this tray carries its own slug and opens on that.
+// RIGHT-CLICK opens the tray, which is the answer to "watching WHAT?" — a
+// search field over every repository this machine has, watched or not, plus
+// the button that widens where it looks.
 //
 // The division of labour with the browser page is deliberate. This tray is a
 // launcher: type three letters, hit enter, the observatory opens on that

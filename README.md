@@ -10,8 +10,8 @@ work **smells agentic**.
 > Agents are disposable ships. Issues and comments are the civilization.
 > The repository is the planet. This is the observatory.
 
-**Left-click** the 🌀 chip in the bar → the swarm opens. **Right-click** it →
-the picker, over every repository on this machine.
+**Left-click** the 🌀 chip in the bar → the swarm opens, on omarchy.
+**Right-click** it → the picker, over every repository on this machine.
 
 ## Any repository, not just omarchy
 
@@ -26,6 +26,13 @@ exist — with a button that adds one to the search.
 Picking a repository that is *not* yet watched runs the induction battery: fifteen
 checks that decide whether watching it would produce an honest instrument or a
 confident wrong one.
+
+Opening it plainly still lands on omarchy, however many repositories you have
+inducted and whichever one you were reading last: the chip, the launcher and a
+bookmark of the bare URL all arrive there. Steering the instrument and choosing
+what it opens on are different acts. Anything that names a repository — a picker
+result, a tab in the strip, a URL with `?project=` in it — is honoured instead,
+and switching writes the slug into the URL so a reload stays put.
 
 ```
 bin/fix-everything-observatory preflight ~/src/some-repo   # run the checks, change nothing

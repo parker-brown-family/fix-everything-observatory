@@ -39,7 +39,8 @@ case "${1:-open}" in
   open)
     # An optional project slug: the bar widget's search results each open the
     # observatory pointed at their own repository, and the page reads the slug
-    # straight off the query string.
+    # straight off the query string. With none, the page lands on the built-in
+    # repository rather than on whatever was last on screen.
     ensure_server
     if [ -n "${2:-}" ]; then
       exec xdg-open "${URL}?project=${2}"
