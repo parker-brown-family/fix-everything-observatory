@@ -1,0 +1,45 @@
+# vertical.txt — the 9:16 cut. A narrative loop: the last card leads into the
+# first, so a replay reads as the next line rather than a restart.
+#
+# Payoff written first (the repo is quieting), then the hook, then the bridge
+# between them. The hook is grammatically open at the front so something can
+# precede it; the bridge never names the subject, because naming it is what makes
+# the seam visible.
+#
+# Read the last card, then the first, out loud:
+#   "…and this is what you watch for. / The moment a repository starts healing
+#    faster than it breaks —"
+#
+# Length is set by the footage, not by taste: take02 holds ~30s of clean frames
+# between the curtain dropping and another window taking the screen, and at the
+# 2x replay rate the swarm reaches today at about the same moment. No figure that
+# moves week to week is spoken — the camera lands on the rail and the screen
+# reports the live one, so the cut cannot go stale.
+
+The moment a repository starts
+healing faster than it breaks —
+
+Every dot is an open bug.
+
+Further out means older.
+
+Since June 2025.
+Nine thousand of them.
+
+Violet means a robot filed it.
+
+Grey means no sign.
+
+Hollow means nobody looked.
+
+So it never counts as clean.
+
+Watch the middle band.
+
+Narrowing means it is shrinking.
+
+Half close inside twenty-eight hours.
+
+It is getting quieter.
+
+And this is what you watch for.
