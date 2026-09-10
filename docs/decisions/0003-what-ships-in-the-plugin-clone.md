@@ -52,13 +52,24 @@ purpose" question by itself: its first line reads *NOT SENT*.
 - `docs/decisions/`, `docs/research/`, `docs/2026-09-07-qa-pass.md` — the README
   sends readers here by name.
 
-## What this does not fix
+## What this does not fix, and why that is fine
 
-Untracking does not shrink `.git`. Those blobs are in history, a clone is full,
-and the 3.1 MB comes down only with a history rewrite — which would break every
-existing clone and every commit link, for about 2 MB. Not worth it. The working
-tree a user checks out is now clean, which is the part a reviewer reads and the
-part that misled one.
+Untracking does not shrink `.git`. A clone is full, so the history comes with it.
+Measured 2026-09-10, by blob, across every reachable object:
+
+| In history | Bytes |
+|---|---:|
+| Files still tracked today — `seed/manifest.js.gz`, `preview.png`, and successive versions of `app/swarm.html`, `observatory.py`, `README.md` | 3,264,863 |
+| Gone from HEAD, reachable only in history | 1,841,360 |
+
+So **two thirds of `.git` is the history of files we ship on purpose**, and a
+rewrite recovers 1.8 MB at most. Against that: every existing clone breaks, every
+commit link dies — including the ones in the closing comment on issue #17 and in
+this file — and a public repository under marketplace review gets force-pushed.
+Declined on the numbers rather than skipped.
+
+The visible tree is the part a reviewer reads, and the part that misled one. That
+is now clean, and `bin/verify` keeps it that way.
 
 Future reports and briefs are ignored by default, the way handoffs are. Anything
 meant to ship gets added deliberately with `git add -f`, and that decision gets a
