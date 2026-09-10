@@ -271,6 +271,33 @@ else
   ok "no tracked page fetches from a third-party host"
 fi
 
+# `omarchy plugin add` runs a plain `git clone`, so tracked means shipped — and
+# the failure mode is not a spike, it is drift. reports/ reached 2.6MB one
+# reasonable-looking commit at a time, larger than the whole runtime, and it was
+# caught by hand twice before anything mechanical noticed. This is the notice.
+#
+# The allowlist is what the plugin needs in order to run. Everything outside it
+# — the offline tools, the tests, the decision records, CI — is legitimate but
+# has to stay bounded. The ceiling sits deliberately close to the current figure
+# so that raising it costs a line in a diff, which is where a person sees it and
+# asks what got added. Per-artifact reasoning is in
+# docs/decisions/0003-what-ships-in-the-plugin-clone.md.
+payload_max=262144
+payload_re='^(app|bin|contract|tray|seed)/|^(BarWidget\.qml|observatory\.py|induction\.py|manifest\.json|preview\.png|README\.md|LICENSE)$'
+payload=0
+while IFS= read -r -d '' f; do
+  [[ $f =~ $payload_re ]] && continue
+  payload=$(( payload + $(stat -c%s "$root/$f" 2>/dev/null || echo 0) ))
+done < <(git -C "$root" ls-files -z)
+payload_kb=$(( payload / 1024 ))
+if (( payload > payload_max )); then
+  err "${payload_kb}KB tracked outside the runtime paths, past the $(( payload_max / 1024 ))KB ceiling — all of it ships to every user on install"
+elif (( payload > payload_max * 8 / 10 )); then
+  warn "${payload_kb}KB tracked outside the runtime paths, within 20% of the $(( payload_max / 1024 ))KB ceiling"
+else
+  ok "${payload_kb}KB tracked outside the runtime paths, under the $(( payload_max / 1024 ))KB ceiling"
+fi
+
 printf '\n\033[1minterface\033[0m\n'
 
 # The cheap half of the interface tests, and the one that catches the expensive
