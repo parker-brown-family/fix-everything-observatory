@@ -1,3 +1,0 @@
-# Takes are tens of megabytes each and are reproducible from capture.py.
-build/
-__pycache__/

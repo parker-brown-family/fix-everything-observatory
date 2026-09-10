@@ -14,3 +14,17 @@ __pycache__/
 # that reproduced the removed agent-allocation code in full. They stay on the
 # author's disk and out of the plugin.
 handoffs/
+
+# Instrument output, design briefs and the clip pipeline, for the same reason,
+# extended past handoffs/ on 2026-09-10. A fresh clone was 8.2MB, of which
+# reports/ alone was 2.6MB — larger than everything the plugin needs to run.
+# Two of these documents described a capability in the present tense that had
+# been removed four commits earlier, to the reviewer auditing the repository;
+# three fetched a web font from a CDN the README says we never touch.
+# Reasoning and the per-artifact calls:
+# docs/decisions/0003-what-ships-in-the-plugin-clone.md
+# Anything genuinely meant to ship gets `git add -f` and a line in that file.
+reports/
+docs/2026-09-07-omarchy-packaging.html
+docs/body.html
+tools/reel/
