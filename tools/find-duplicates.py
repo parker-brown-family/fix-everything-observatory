@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""queue-collapse — find the distinct work hiding inside a flooded issue queue.
+"""find-duplicates — the same work, filed more than once, in a flooded issue queue.
 
-    queue-collapse OWNER/REPO                 # the worklist
-    queue-collapse OWNER/REPO --commands      # the gh commands, printed, never run
-    queue-collapse OWNER/REPO --html out.html # a page you can send someone
-    queue-collapse OWNER/REPO --json out.json # everything, for tooling
+    python3 find-duplicates.py OWNER/REPO                 # the worklist
+    python3 find-duplicates.py OWNER/REPO --commands      # the gh commands, printed, never run
+    python3 find-duplicates.py OWNER/REPO --html out.html # a page you can send someone
+    python3 find-duplicates.py OWNER/REPO --json out.json # everything, for tooling
 
 Written for a maintainer whose queue is arriving faster than it drains, where the
 expensive thing is no longer deciding — it is discovering that five people already
@@ -13,6 +13,21 @@ sent the same patch.
 What it does: reads the open queue through `gh`, groups items that are the same
 piece of work, and for each group names the one pull request worth reading and the
 items that close when it merges.
+
+Duplicates are the headline, not the whole output. The same pass reports the patches
+that apply cleanly and duplicate nothing, the ones that no longer apply to the base
+at all, and the open items that match work already shipped — which on a queue this
+size are usually worth more than the duplicate list.
+
+It was called `queue-collapse` until 2026-09-09. The name promised a mutation the
+tool cannot perform and deliberately does not propose: collapsing a queue is the
+maintainer's call, and everything here is a view offered to them.
+
+It carries a `.py` rather than sitting bare on PATH because it is read before it is
+run. A stranger meets this file on a web page and decides in about four seconds
+whether it is source worth reading; the extension is that decision's only cue, and
+it is also what makes a desktop hand the file to an editor rather than to a word
+processor when somebody double-clicks it.
 
 Three rules it will not break:
 
@@ -761,7 +776,7 @@ def render_text(p, width=100):
 
 
 def render_commands(p):
-    L = ["# queue-collapse: printed, never executed. Read before running anything.",
+    L = ["# find-duplicates: printed, never executed. Read before running anything.",
          f"# {p['repo']} · {p['generated']}", ""]
     superseded = [a for a in p["already_fixed"] if a["filed_before_the_fix"]]
     if superseded:
@@ -996,7 +1011,8 @@ def normalise(issues, prs, settled=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Find the distinct work hiding inside a flooded issue queue. Read-only.")
+        description="Find the same work filed more than once in a flooded issue queue. "
+                    "Read-only: it proposes, it never closes.")
     ap.add_argument("repo", help="owner/name")
     ap.add_argument("--limit", type=int, default=1000,
                     help="items to examine per type (GitHub's search ceiling is 1000)")

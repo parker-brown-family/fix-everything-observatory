@@ -1,9 +1,9 @@
-# queue-collapse
+# find-duplicates
 
-Find the distinct work hiding inside a flooded issue queue.
+The same work, filed more than once, in a flooded issue queue.
 
 ```
-python3 queue-collapse omacom/omarchy
+python3 find-duplicates.py omacom/omarchy
 ```
 
 One file, standard library only, `gh` for the API. Read-only: it never mutates
@@ -112,7 +112,7 @@ could not review the patch. Only a decision by someone with standing counts.
 ## Tests
 
 ```
-python3 queue-collapse-test.py
+python3 find-duplicates-test.py
 ```
 
 Twenty assertions against a fixture with known-correct answers: that three differently

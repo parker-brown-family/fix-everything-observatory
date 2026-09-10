@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Smoke test for queue-collapse, on a fixture with known-correct answers.
+"""Smoke test for find-duplicates, on a fixture with known-correct answers.
 
 Runs the real code path (normalise → Grouper → plan) against a hand-built queue
 where every expected grouping is known in advance, so a regression in the edge
 rules fails here rather than in a report someone is about to act on.
 
-    python3 tools/queue-collapse-test.py
+    python3 tools/find-duplicates-test.py
 """
 import importlib.machinery, importlib.util, pathlib, sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_loader(
-    "qc", importlib.machinery.SourceFileLoader("qc", str(HERE / "queue-collapse")))
+    "qc", importlib.machinery.SourceFileLoader("qc", str(HERE / "find-duplicates.py")))
 qc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qc)
 
@@ -115,7 +115,7 @@ def check(name, got, want):
         fails.append(name)
 
 
-print("queue-collapse fixture")
+print("find-duplicates fixture")
 
 # the three packet-loss reports and their three patches are one surface
 packet = [grp for grp in p["groups"] if 101 in [m["n"] for m in grp["members"]]]
