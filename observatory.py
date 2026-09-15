@@ -114,6 +114,23 @@ SNIPPET_KEEP = int(os.environ.get("FIX_OBSERVATORY_SNIPPETS", "1500"))
 # ceiling is not the same finding as exhausting a stream, so we do not record it
 # as one.
 EVENT_PAGE_CAP = 300
+# A walk is over when the server stops offering a next page — and on 2026-09-15
+# the issues endpoint began withholding that link after one page, then five,
+# then thirty-one, at random, on a repository holding 9,972 artifacts. Every one
+# of those walks reported complete=True, so the slice guard below (which keys on
+# completeness) waved them through, and a manifest of 9,963 artifacts was
+# replaced by the 400 oldest — all closed in 2025, none of them alive at the
+# cursor, the swarm empty. The lesson is that completeness cannot be read off
+# the stream that is being truncated. It is now checked against a number the
+# walk does not produce: the search index's total for the repository, one
+# request per cycle. Measured agreement when the walk is honest is 9,963 of
+# 9,972 (99.9%), so the floor sits well below that and still rejects the 4% a
+# truncated walk came back with.
+COVERAGE_FLOOR = float(os.environ.get("FIX_OBSERVATORY_COVERAGE_FLOOR", "0.97"))
+# Truncation was transient and random, so a short walk is retried inside the
+# cycle rather than left for twenty-five minutes. Re-requests are conditional,
+# so the pages that were already right cost nothing against the rate budget.
+WALK_ATTEMPTS = int(os.environ.get("FIX_OBSERVATORY_WALK_ATTEMPTS", "3"))
 # An exhaustive cycle is ~600 conditional round trips. They cost nothing against
 # the rate limit (a 304 is free) but they cost wall clock, so it beats slower.
 INTERVAL = int(os.environ.get("FIX_OBSERVATORY_INTERVAL", "900" if TOKEN else "300"))
@@ -620,6 +637,15 @@ def api_page(path: str, row_fn=None, proj: "Project | None" = None):
                 x for x in (row_fn(r) for r in raw) if x is not None]
             m = LINK_NEXT_RE.search(res.headers.get("Link") or "")
             nxt = m.group(1) if m else None
+            # A page that once had a successor keeps it. In an ascending walk a
+            # page's successor is fixed the moment the next page exists — new
+            # artifacts land at the far end, never behind a cursor already
+            # issued — so a fresh response arriving WITHOUT the link is the
+            # server failing to mention it, not the stream having shortened.
+            # Taking the absence at face value also wrote next=None into the
+            # cache, which broke the chain for every later cycle as well.
+            if nxt is None and ent and ent.get("next"):
+                nxt = ent["next"]
             proj.cache[path] = {"etag": res.headers.get("ETag"), "body": body,
                                 "next": nxt}
             return body, nxt
@@ -634,6 +660,46 @@ def api_page(path: str, row_fn=None, proj: "Project | None" = None):
 def api(path: str, proj: "Project | None" = None):
     """One object, no pagination."""
     return api_page(path, None, proj)[0]
+
+
+def artifact_total(repo: str, proj: "Project | None" = None):
+    """How many issues and pull requests a repository holds, ever.
+
+    Returns (total, partial_index). A total of None is unknown and must stay
+    unknown: it is the answer when the request failed or the index declined,
+    and reading it as zero would turn "we could not check" into "the walk saw
+    everything", which is the exact confusion this function exists to end.
+
+    The search index is the only endpoint that will say. /issues paginates by
+    opaque cursor and counts nothing, and the repository object carries
+    open_issues_count, which for a repair swarm omits most of the history.
+
+    It deliberately does NOT go through api_page: search has its own budget
+    (30 a minute, not 5,000 an hour), and folding that into the rate record
+    would leave the manifest reporting a limit belonging to a different
+    endpoint, and the cycle skipper reading a budget it does not spend.
+    """
+    from urllib.parse import quote
+    proj = proj or project(None)
+    token = proj.token()
+    headers = {
+        "User-Agent": "fix-everything-observatory/2.0 (+https://wecanfixeverything.com)",
+        "Accept": "application/vnd.github+json",
+    }
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    path = f"/search/issues?q={quote('repo:' + repo)}&per_page=1"
+    try:
+        with urlopen(Request("https://api.github.com" + path, headers=headers),
+                     timeout=30) as res:
+            body = json.load(res)
+    except (HTTPError, URLError, OSError, ValueError):
+        return None, False
+    if not isinstance(body, dict):
+        return None, False
+    total = body.get("total_count")
+    return (total if isinstance(total, int) else None,
+            bool(body.get("incomplete_results")))
 
 
 def budget_low(key: str = "anonymous") -> bool:
@@ -774,16 +840,36 @@ def mine_once(proj: "Project | None" = None) -> None:
             f"skipped, resets {reset.isoformat(timespec='minutes')}")
         return
 
-    arts, issues_complete, err, issue_pages = fetch_all(
-        f"/repos/{REPO}/issues?state=all&sort=created&direction={order}"
-        "&per_page=100", issue_row, cap, proj)
+    # What the repository actually holds, asked once and independently of the
+    # walk, so that "the server offered no next page" can be checked against
+    # something rather than believed.
+    expected, expected_partial = artifact_total(REPO, proj)
+    arts, issues_complete, err, issue_pages, short = [], False, None, 0, False
+    for attempt in range(1, WALK_ATTEMPTS + 1):
+        arts, issues_complete, err, issue_pages = fetch_all(
+            f"/repos/{REPO}/issues?state=all&sort=created&direction={order}"
+            "&per_page=100", issue_row, cap, proj)
+        arts = [a for a in arts if a["number"] is not None]
+        # Short only counts as a fault when the walk CLAIMED to be finished. A
+        # walk stopped by the page cap or the rate budget is an honest slice and
+        # already carries complete=False; retrying it would only spend more.
+        short = bool(expected and issues_complete
+                     and len(arts) < expected * COVERAGE_FLOOR)
+        if not short:
+            break
+        issues_complete = False
+        err = err or (f"issues walk ended at {len(arts)} of {expected} "
+                      f"artifacts with no next link — truncated, not exhausted")
+        if attempt < WALK_ATTEMPTS:
+            log(f"[{proj.slug}] issues walk returned {len(arts)} of {expected} "
+                f"and called it the end — attempt {attempt} of "
+                f"{WALK_ATTEMPTS}, walking again")
     comments, comments_complete, c_err, comment_pages = fetch_all(
         f"/repos/{REPO}/issues/comments?sort=created&direction={order}"
         "&per_page=100", comment_row, cap, proj)
     events, events_complete, e_err, event_pages = fetch_all(
         f"/repos/{REPO}/issues/events?per_page=100", event_row, cap, proj)
     err = err or c_err or e_err
-    arts = [a for a in arts if a["number"] is not None]
     events_capped = event_pages >= EVENT_PAGE_CAP
     if events_capped:
         events_complete = False
@@ -840,11 +926,24 @@ def mine_once(proj: "Project | None" = None) -> None:
             prev = json.loads(manifest_path.read_text())
         except Exception:
             prev = None
+        prev_cov = (prev.get("coverage") or {}) if prev else {}
+        prev_count = prev_cov.get("fetched_count")
+        if not isinstance(prev_count, int):
+            prev_count = len(prev.get("artifacts") or []) if prev else 0
+        # Whole beats truncated, and the bigger picture beats the smaller one.
+        # The count comparison is what lets the instrument recover on its own: a
+        # manifest that claims completeness can be WRONG about it (that is the
+        # fault this guard now exists for), and without the second clause such a
+        # manifest would defend its own hole forever, rejecting every honest
+        # walk that came after it.
         if (prev and prev.get("repo") == REPO
-                and (prev.get("coverage") or {}).get("complete")):
+                and prev_cov.get("complete") and prev_count >= len(arts)):
+            why = (f"the walk stopped short at {len(arts)} of {expected} and "
+                   f"called it the end" if short
+                   else "A token is what raises the horizon.")
             log(f"[{proj.slug}] this cycle is a slice ({len(arts)} artifacts) "
                 f"and the manifest on disk was walked to the end — keeping the "
-                f"complete one. A token is what raises the horizon.")
+                f"complete one. {why}")
             proj.save_cache()
             return
 
@@ -854,7 +953,7 @@ def mine_once(proj: "Project | None" = None) -> None:
     # Stale-and-whole beats fresh-and-truncated for an instrument about long arcs,
     # and the page dates the seed so nobody mistakes it for now.
     if not issues_complete and not manifest_path.exists():
-        if seed and seed.get("complete"):
+        if seed and seed.get("complete") and (seed.get("artifacts") or 0) >= len(arts):
             log(f"[{proj.slug}] this cycle is a slice ({len(arts)} artifacts) and "
                 f"the committed seed was walked to the end — serving the seed, "
                 f"writing nothing. A token is what raises the horizon.")
@@ -885,6 +984,8 @@ def mine_once(proj: "Project | None" = None) -> None:
             "events_capped": events_capped,
             "events_count": len(events),
             "oldest_event": events[0]["created_at"] if events else None,
+            "repo_artifact_total": expected,
+            "repo_artifact_total_partial": expected_partial,
             "repo_open_issues": meta.get("open_issues_count") if meta else None,
             "repo_created_at": meta.get("created_at") if meta else None,
             "authenticated": bool(token),

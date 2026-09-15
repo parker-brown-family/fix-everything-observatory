@@ -941,7 +941,7 @@ function renderRail(){
   <div class="kv"><span>no signal</span><b>${attr.none}</b></div>
   ${attr.unmeasured?`<div class="kv"><span><span class="unk" title="the manifest carries no attribution for these artifacts at all — they were never scored, which is not the same as scoring clean. Grey hollow motes.">never scored</span></span><b class="r">${attr.unmeasured}</b></div>`:''}
   <h3>COVERAGE</h3>
-  <div class="kv"><span>artifacts fetched</span><b class="${cov.complete?'g':'y'}">${cov.fetched_count??d.artifacts.length}${cov.complete?' · all':''}</b></div>
+  <div class="kv"><span>artifacts fetched</span><b class="${cov.complete?'g':'y'}">${cov.fetched_count??d.artifacts.length}${cov.complete?' · all':cov.repo_artifact_total?' of '+cov.repo_artifact_total:''}</b></div>
   <div class="kv"><span>open in manifest</span><b>${d.artifacts.filter(a=>!a.closed).length}</b></div>
   <div class="kv"><span>repo reports open</span><b>${cov.repo_open_issues??'—'}</b></div>
   <div class="kv"><span>comments / events</span><b>${d.stream.filter(s=>s.kind==='comment').length} / ${d.stream.filter(s=>s.kind!=='comment').length}</b></div>

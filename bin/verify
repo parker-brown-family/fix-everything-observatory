@@ -304,6 +304,16 @@ printf '\n\033[1minterface\033[0m\n'
 # bug: markup and script live in one file, so deleting a line of HTML can leave
 # a live $('#id') behind — which is a TypeError at parse time and a blank
 # instrument, not a cosmetic gap.
+# The miner's honesty about its own coverage. A truncated walk that reports
+# itself complete overwrites fifteen months of history with two days of it, and
+# the page has no way to know — which is how the swarm went empty on 2026-09-15.
+if walkout="$(python3 "$root/tests/check_walk_guard.py" 2>&1)"; then
+  printf '%s\n' "$walkout" | sed -n '2,$p'
+else
+  printf '%s\n' "$walkout" | sed -n '2,$p'
+  err "a short walk can overwrite a complete manifest again"
+fi
+
 if refout="$(python3 "$root/tests/check_refs.py" 2>&1)"; then
   printf '%s\n' "$refout"
 else
