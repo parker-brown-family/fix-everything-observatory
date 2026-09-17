@@ -1116,6 +1116,68 @@ WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
 # a marketplace security review, omacom/omarchy-plugin-marketplace#5534,
 # 2026-09-17.
 #
+# ---- who is allowed to ask at all ---------------------------------------------
+#
+# THE CUSTOM HEADER WAS NEVER AUTHENTICATION, AND READING IT AS SUCH WAS THE BUG.
+# `X-Fix-Observatory: 1` is a CSRF defence and a good one: a browser cannot set a
+# custom header cross-origin without a preflight, so a page in another tab cannot
+# reach these routes. It is also a PUBLIC CONSTANT in a public repository, which
+# makes it worth nothing against a caller that is not a browser. Any other
+# account on this machine could send it, POST a path of its choosing to
+# /api/induct, have the server read that repository AS THE OWNER OF THIS PROCESS,
+# resolve the repository's `gh` token, and then read the private issue and
+# comment data back out of the mined manifest. Neither the Host check nor CORS
+# touches a native local client. Raised in a marketplace security review,
+# omacom/omarchy-plugin-marketplace#5534, 2026-09-17.
+#
+# So who the caller is now comes from the kernel rather than from anything the
+# caller says. /proc/net/tcp is the socket table and carries the owning uid of
+# every socket on the machine; a connection is refused unless the socket on the
+# other end belongs to the same user this process runs as. It is checked at
+# admission, before a worker exists, so it covers EVERY route and every static
+# file — including the mined manifest, which is where the private data would
+# actually have left.
+#
+# WHY NOT A SHARED SECRET. A per-install token in a 0600 file is readable by
+# every process running as this user, which is exactly the set of callers the
+# check admits — so against the account boundary in that report the two are
+# equivalent, and a token additionally introduces something that can leak through
+# a log, an argv, an environment or a backup. The kernel's answer cannot leak,
+# and it needs no change to the browser app, the bar widget or any CLI.
+SERVER_UID = os.getuid()
+PROC_NET_TCP = Path("/proc/net/tcp")
+
+
+def peer_uid(peer_port: int, our_port: int):
+    """The uid owning the loopback socket on `peer_port`, or None if unknown.
+
+    None is not "nobody" and is never treated as permission — see the caller.
+    The row wanted is the CLIENT's socket, the one whose local address is the
+    peer's port and whose remote address is ours; our own accepted socket is the
+    mirror of it and would answer with our uid no matter who called.
+
+    A sandboxed browser does not break this. /proc/net/tcp is per network
+    namespace, so the worry would be a caller whose socket lives in a namespace
+    this process cannot see — but a separate network namespace has its own
+    loopback, so such a caller could not have reached 127.0.0.1 here in the first
+    place. Anything that can connect is in this namespace and is in this table.
+    """
+    want_local = f"0100007F:{peer_port:04X}"
+    want_rem = f"0100007F:{our_port:04X}"
+    try:
+        rows = PROC_NET_TCP.read_text().splitlines()[1:]
+    except OSError:
+        return None
+    for row in rows:
+        f = row.split()
+        if len(f) > 7 and f[1] == want_local and f[2] == want_rem:
+            try:
+                return int(f[7])
+            except ValueError:
+                return None
+    return None
+
+
 # Every number below is a ceiling, not a target: the app makes a handful of
 # small requests, so anything that trips one of these is already not us.
 MAX_BODY = 64 * 1024        # the largest real body is a roots edit — a path
@@ -1152,7 +1214,8 @@ class BoundedServer(ThreadingHTTPServer):
         self._live = 0
         self._per_peer: dict = {}
         self._admit_lock = threading.Lock()
-        self.refused = 0          # read by the tests, and by nothing else
+        self.refused = 0          # over budget — read by the tests, and nothing else
+        self.rejected = 0         # not this user
         # The high-water mark, so the ceilings can be checked against what this
         # actually costs rather than against a number somebody liked. A real page
         # load — the app, its icons, and a 10.8 MB manifest — plus two forty-wide
@@ -1182,6 +1245,26 @@ class BoundedServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         peer = client_address[0]
+        # THE IDENTITY GATE COMES FIRST, BEFORE THE BUDGET AND BEFORE A WORKER.
+        # A caller that is not this user should never cost a connection slot, let
+        # alone a thread; and refusing here is what puts every route and every
+        # static file behind it rather than the ones somebody remembered to list.
+        # Unknown fails closed: if the kernel will not say who is on the other
+        # end, that is not permission.
+        who = peer_uid(client_address[1], self.server_address[1])
+        if who != SERVER_UID:
+            with self._admit_lock:
+                self.rejected += 1
+            try:
+                request.settimeout(1.0)
+                request.sendall(b"HTTP/1.1 403 Forbidden\r\n"
+                                b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            log(f"refused a connection owned by uid {who} — this server answers "
+                f"only to uid {SERVER_UID}")
+            return
         if self._admit(peer):
             super().process_request(request, client_address)
             return
@@ -1567,8 +1650,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
     # Every one of these carries a custom-header requirement, and so do the
     # three GETs with side effects: a custom header forces a CORS preflight,
     # so a random page in another tab cannot fire them cross-origin, while
-    # our own same-origin app sends it without ceremony. The header is the
-    # second leg; _host_ok is the first, and neither is sufficient alone.
+    # our own same-origin app sends it without ceremony.
+    #
+    # THAT IS A CSRF DEFENCE AND NOT AN AUTHENTICATION, and this comment used to
+    # blur the two by calling it a "leg". The header is a public constant; it
+    # stops a browser and stops nothing else. What decides whether a caller may
+    # be here at all is the peer-uid check at admission, above — the Host header
+    # and this one both describe a browser's behaviour, and a program that is not
+    # a browser can satisfy either at will.
     def do_POST(self):  # noqa: N802 — stdlib name
         if not self._host_ok():
             return

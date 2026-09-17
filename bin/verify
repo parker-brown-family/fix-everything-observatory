@@ -334,6 +334,19 @@ else
   err "a local caller can choose what this server allocates, or how many threads it takes"
 fi
 
+# WHO the server answers, which is a different question from what a caller may
+# cost it. The custom header is a CSRF defence and a public constant, so it stops
+# a browser and stops nothing else; until 2026-09-17 it was the only thing in
+# front of the write routes, and any other account on this box could have
+# inducted a private repository and read the mined result back out. Identity now
+# comes from the kernel's socket table.
+if idout="$(python3 "$root/tests/check_local_identity.py" 2>&1)"; then
+  printf '%s\n' "$idout" | sed -n '2,$p'
+else
+  printf '%s\n' "$idout" | sed -n '2,$p'
+  err "the loopback API answers somebody who is not this user"
+fi
+
 # The other half needs a browser, and a bare runner may not have one. Skipped
 # with a reason rather than passing quietly: an interface test that silently
 # does nothing is worse than none, because the green tick lies.

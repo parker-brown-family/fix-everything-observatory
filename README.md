@@ -89,10 +89,29 @@ requires a custom header on every route with a side effect; the mined history
 is written to `~/.local/state/fix-everything-observatory/` and nothing is ever
 written into the plugin's own directory. No user configuration is modified.
 
-**On what a caller may cost you.** Loopback decides which interface accepts a
-connection; it does not decide which processes on your machine may open one, and
-every account on the box can. So there are ceilings, and they are checked rather
-than promised. A request body is capped at 64 KB and a declared
+**On who it answers.** Loopback decides which interface accepts a connection; it
+does not decide who may open one, and until 2026-09-17 nothing else did either.
+The `X-Fix-Observatory` header is a CSRF defence — a browser cannot set a custom
+header cross-origin without a preflight — but it is a public constant, so it
+stops a browser and stops nothing else. Any other account on this machine could
+have sent it, POSTed a path to `/api/induct`, had the server read that repository
+*as you*, and read the private issue data back out of the mined manifest.
+
+Identity now comes from the kernel rather than from anything the caller sends:
+`/proc/net/tcp` carries the owning uid of every socket, and a connection is
+refused at admission unless the socket on the other end belongs to the same user
+this process runs as. Because it is checked before a worker exists, it covers
+every route and every static file, the mined manifest included — not a list of
+routes somebody has to remember to keep current. If the kernel will not say who
+is on the other end, that is not permission and the connection is refused.
+There is deliberately no shared token: a secret in a 0600 file is readable by
+exactly the set of callers this admits, and adds something that can leak through
+a log, an argv or a backup. `tests/check_local_identity.py` pins both halves —
+that the lookup really reads this user's uid off a live connection, and that
+every other answer, including none, is refused.
+
+**On what a caller may cost you.** There are also ceilings, and they are checked
+rather than promised. A request body is capped at 64 KB and a declared
 `Content-Length` over that is refused without a byte being read — the header is
 the caller's opinion, not an allocation order. Connections are counted before a
 worker exists for them: 32 in flight across the server, 16 from any one peer,
