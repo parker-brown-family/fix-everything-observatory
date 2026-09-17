@@ -29,6 +29,8 @@ import json
 import os
 import re
 import shutil
+import socket
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -1094,10 +1096,174 @@ READ_ROUTES = frozenset({"/api/caps", "/api/projects", "/api/scan",
 WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
                           "/api/active", "/api/roots", "/api/mine"})
 
+# ---- what a caller is allowed to cost us --------------------------------------
+#
+# LOOPBACK IS NOT A TRUST BOUNDARY, IT IS AN INTERFACE. Binding to 127.0.0.1
+# keeps this off the network; it does not keep it away from every other process
+# and every other user account on the machine, all of which can open a socket to
+# it. Without a ceiling, two of the cheapest possible requests cost more than
+# anyone would choose to spend:
+#
+#   a POST declaring Content-Length: 8589934592 — the read was sized from the
+#   header, so the allocation was the caller's to choose;
+#
+#   a hundred connections that send one byte and stop — each was accepted and
+#   given a thread before the Host check could look at it, so the threads and
+#   the descriptors went before any of our own rules ran.
+#
+# Both are denial of service against the operator's own desktop rather than
+# against a server, which is why they read as unimportant and are not. Raised in
+# a marketplace security review, omacom/omarchy-plugin-marketplace#5534,
+# 2026-09-17.
+#
+# Every number below is a ceiling, not a target: the app makes a handful of
+# small requests, so anything that trips one of these is already not us.
+MAX_BODY = 64 * 1024        # the largest real body is a roots edit — a path
+MAX_CONNECTIONS = 32        # in flight, whole server
+MAX_PER_PEER = 8            # in flight, one peer address
+REQUEST_QUEUE = 16          # listen backlog: what the kernel holds for us
+HEADER_DEADLINE = 5.0       # absolute, from accept to the end of the headers
+EXCHANGE_DEADLINE = 25.0    # absolute, from the end of the headers to the close
+IDLE_TIMEOUT = 5.0          # per-recv, so an idle socket goes without waiting
+
+
+class BoundedServer(ThreadingHTTPServer):
+    """A thread per connection, but only up to a number we chose.
+
+    THE COUNT HAPPENS BEFORE THE THREAD EXISTS. `process_request` is the last
+    place a connection can be turned away for free — after it, ThreadingMixIn
+    has already spawned the worker that the attacker wanted spawned. So the
+    admission test lives there, the release lives in the worker's own `finally`,
+    and a refusal costs one 503 line and a close.
+    """
+
+    daemon_threads = True
+    request_queue_size = REQUEST_QUEUE
+    allow_reuse_address = True
+
+    def __init__(self, *args, **kwargs):
+        self._live = 0
+        self._per_peer: dict = {}
+        self._admit_lock = threading.Lock()
+        self.refused = 0          # read by the tests, and by nothing else
+        super().__init__(*args, **kwargs)
+
+    def _admit(self, peer: str) -> bool:
+        with self._admit_lock:
+            if self._live >= MAX_CONNECTIONS:
+                return False
+            if self._per_peer.get(peer, 0) >= MAX_PER_PEER:
+                return False
+            self._live += 1
+            self._per_peer[peer] = self._per_peer.get(peer, 0) + 1
+            return True
+
+    def _release(self, peer: str) -> None:
+        with self._admit_lock:
+            self._live = max(0, self._live - 1)
+            left = self._per_peer.get(peer, 0) - 1
+            if left > 0:
+                self._per_peer[peer] = left
+            else:
+                self._per_peer.pop(peer, None)
+
+    def process_request(self, request, client_address):
+        peer = client_address[0]
+        if self._admit(peer):
+            super().process_request(request, client_address)
+            return
+        with self._admit_lock:
+            self.refused += 1
+        # Say so rather than dropping the socket: a refusal a client can read is
+        # one it stops retrying. The send gets its own short timeout, because a
+        # peer that will not read is the same peer that just used up the budget.
+        try:
+            request.settimeout(1.0)
+            request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                            b"Content-Length: 0\r\nConnection: close\r\n\r\n")
+        except OSError:
+            pass
+        self.shutdown_request(request)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(client_address[0])
+
+    def handle_error(self, request, client_address):
+        """A peer that hangs up is not an incident, and must not read as one.
+
+        socketserver's default prints a full traceback for it. Every refusal and
+        every expired deadline above ends with the other side gone mid-reply, so
+        the default turns each one into forty lines on the operator's terminal —
+        which hands the same caller a second, noisier way to spend the desktop's
+        attention. Anything that is NOT an ordinary disconnect still gets said,
+        on one line, because a real fault in a request thread is worth knowing
+        about and this is the only place it surfaces.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError,
+                            ConnectionAbortedError, TimeoutError, OSError)):
+            return
+        log(f"request from {client_address[0]} failed: {exc!r}")
+
 
 class QuietHandler(SimpleHTTPRequestHandler):
+    # An idle socket goes after this long without a byte. It is the cheap half
+    # of the pair and it catches nothing that drips.
+    timeout = IDLE_TIMEOUT
+
     def log_message(self, *args):  # noqa: N802 — stdlib name
         pass
+
+    # ---- deadlines --------------------------------------------------------
+    #
+    # A PER-RECV TIMEOUT IS NOT A DEADLINE. A caller sending one byte every four
+    # seconds never idles for five, and holds the thread for as long as it cares
+    # to. What bounds that is wall-clock time from accept, enforced by something
+    # that is not the reading thread — so a timer closes the socket underneath
+    # it, and the read fails the way a dropped connection fails.
+    #
+    # Two budgets rather than one, because they are answerable to different
+    # things: the headers are all the caller's to send and get five seconds,
+    # while the exchange after them includes our own work and its reply and gets
+    # twenty-five.
+    def setup(self):
+        super().setup()
+        self._expiry = None
+        self._arm(HEADER_DEADLINE)
+
+    def _arm(self, seconds: float) -> None:
+        self._disarm()
+        self._expiry = threading.Timer(seconds, self._expire)
+        self._expiry.daemon = True
+        self._expiry.start()
+
+    def _disarm(self) -> None:
+        if getattr(self, "_expiry", None) is not None:
+            self._expiry.cancel()
+            self._expiry = None
+
+    def _expire(self) -> None:
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def parse_request(self):
+        ok = super().parse_request()
+        # The headers are in. Whatever the caller spent getting here is spent;
+        # the body and the reply start a budget of their own.
+        self._arm(EXCHANGE_DEADLINE)
+        return ok
+
+    def finish(self):
+        self._disarm()
+        try:
+            super().finish()
+        except OSError:
+            pass          # the timer may already have taken the socket
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
@@ -1122,13 +1288,50 @@ class QuietHandler(SimpleHTTPRequestHandler):
         return {k: v[0] for k, v in
                 parse_qs(urlparse(self.path).query).items()}
 
-    def _body(self) -> dict:
+    def _body(self):
+        """The request body, or None when it has already been refused.
+
+        THE DECLARED LENGTH IS THE CALLER'S OPINION, NOT AN ALLOCATION ORDER.
+        This used to be `self.rfile.read(int(Content-Length))`, which let the
+        caller name the number of bytes we would try to hold — a header reading
+        8589934592 was an eight-gigabyte allocation request from any process on
+        the machine that could open a socket.
+
+        Two refusals, because either one alone leaves a way through. A declared
+        length over the ceiling is refused without reading a byte, which is the
+        cheapest possible answer. Then the read itself asks for one byte MORE
+        than the ceiling and refuses anything that long, which is what catches a
+        body that lies low or declares nothing at all — and it is a ceiling on
+        the allocation whatever the header said.
+        """
+        if self.headers.get("Transfer-Encoding"):
+            # Not decoded anywhere in this server, so it would otherwise read as
+            # an empty body and the request would quietly do the wrong thing.
+            self._json(411, {"ok": False, "error": "send a Content-Length"})
+            return None
+        raw_len = self.headers.get("Content-Length")
         try:
-            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            declared = int(raw_len or 0)
+        except ValueError:
+            self._json(400, {"ok": False, "error": "bad Content-Length"})
+            return None
+        if declared < 0 or declared > MAX_BODY:
+            self._json(413, {"ok": False,
+                             "error": f"body over {MAX_BODY} bytes"})
+            return None
+        # The ceiling is inside the read call rather than in a check beside it,
+        # so at most MAX_BODY + 1 bytes are ever asked for however the check
+        # above is later changed. There is no second length test after this,
+        # because read() can return fewer bytes than asked for and never more.
+        try:
+            raw = self.rfile.read(min(declared, MAX_BODY + 1)) if declared else b""
+        except OSError:
+            return None                      # the deadline took the socket
+        try:
             out = json.loads(raw or b"{}")
-            return out if isinstance(out, dict) else {}
         except (ValueError, TypeError, json.JSONDecodeError):
             return {}
+        return out if isinstance(out, dict) else {}
 
     # ---- the two gates every request passes ------------------------------
     # Binding to 127.0.0.1 decides which INTERFACE accepts a connection. It
@@ -1357,6 +1560,8 @@ class QuietHandler(SimpleHTTPRequestHandler):
             self.send_error(403, "missing X-Fix-Observatory header")
             return
         body = self._body()
+        if body is None:
+            return          # _body has already answered, and said why
 
         if path == "/api/induct":
             self._json(*induct(body.get("path") or ""))
@@ -1566,7 +1771,7 @@ def serve() -> None:
     threading.Thread(target=miner, daemon=True).start()
     handler = functools.partial(QuietHandler, directory=str(ROOT))
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", PORT), handler)
+        httpd = BoundedServer(("127.0.0.1", PORT), handler)
     except OSError as exc:
         log(f"port {PORT} unavailable ({exc}) — assuming an observatory already serves")
         return

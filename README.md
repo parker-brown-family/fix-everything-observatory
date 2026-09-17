@@ -89,6 +89,20 @@ requires a custom header on every route with a side effect; the mined history
 is written to `~/.local/state/fix-everything-observatory/` and nothing is ever
 written into the plugin's own directory. No user configuration is modified.
 
+**On what a caller may cost you.** Loopback decides which interface accepts a
+connection; it does not decide which processes on your machine may open one, and
+every account on the box can. So there are ceilings, and they are checked rather
+than promised. A request body is capped at 64 KB and a declared
+`Content-Length` over that is refused without a byte being read — the header is
+the caller's opinion, not an allocation order. Connections are counted before a
+worker exists for them: 32 in flight across the server, 8 from any one peer, and
+anything past that gets a 503 and a close. Each connection carries an absolute
+wall-clock deadline, five seconds for the headers and twenty-five for the
+exchange after them, enforced by a timer rather than by an idle timeout — one
+byte every four seconds never idles, and used to hold a thread for as long as
+the caller cared to. `tests/check_dos_limits.py` starts a real server on a spare
+port and attacks it with each of those in turn; `bin/verify` runs it.
+
 **On spawning, precisely.** `observatory.py` — the process that reads mined
 GitHub text — cannot start a process at all; it does not import `subprocess`,
 and `bin/verify` walks its import graph to keep it that way. The codebase does

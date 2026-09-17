@@ -321,6 +321,19 @@ else
   err "the swarm page reaches for an element that is defined nowhere in it"
 fi
 
+# What a caller on this machine may cost the operator's desktop. Loopback is an
+# interface, not a trust boundary: every other process and user account on the
+# box can open a socket here, and before 2026-09-17 a declared Content-Length
+# sized our allocation and a handful of silent connections took a thread each
+# before the Host check could look at them. This starts a real server on a spare
+# port and attacks it.
+if dosout="$(python3 "$root/tests/check_dos_limits.py" 2>&1)"; then
+  printf '%s\n' "$dosout" | sed -n '2,$p'
+else
+  printf '%s\n' "$dosout" | sed -n '2,$p'
+  err "a local caller can choose what this server allocates, or how many threads it takes"
+fi
+
 # The other half needs a browser, and a bare runner may not have one. Skipped
 # with a reason rather than passing quietly: an interface test that silently
 # does nothing is worse than none, because the green tick lies.
