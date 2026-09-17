@@ -151,6 +151,33 @@ while httpd._live > 0 and time.monotonic() < deadline:
 check("closing them gives the budget back", httpd._live == 0,
       f"{httpd._live} still counted")
 
+# THE CEILING HAS TO CLEAR WHAT THE APP ACTUALLY DOES. Measured with a real
+# browser against the real server — a page load plus two forty-wide parallel
+# bursts — the high-water mark is 6, because that is where Chrome caps
+# concurrent connections to one origin. On loopback the browser shares its
+# bucket with the bar widget and every terminal on the box, so the headroom
+# above that number is the whole margin there is. A ceiling that throttled the
+# instrument would pass every other line in this file.
+BROWSER_PEAK = 6
+httpd.peak = 0
+before = httpd.refused
+burst, codes = [], []
+for _ in range(BROWSER_PEAK):
+    s = connect()
+    s.sendall(b"GET /api/caps HTTP/1.1\r\n"
+              + f"Host: 127.0.0.1:{PORT}\r\n".encode()
+              + b"Connection: close\r\n\r\n")
+    burst.append(s)
+for s in burst:
+    codes.append(status(s))
+    s.close()
+check(f"a browser's own peak of {BROWSER_PEAK} at once is all answered",
+      codes.count("200") == BROWSER_PEAK, f"got {codes}")
+check("and none of it was refused", httpd.refused == before)
+check(f"leaving headroom over the measured peak, not just over one request",
+      obs.MAX_PER_PEER >= BROWSER_PEAK * 2,
+      f"per-peer {obs.MAX_PER_PEER} against a measured peak of {BROWSER_PEAK}")
+
 # ---- the deadline -------------------------------------------------------------
 # A per-recv timeout is not a deadline: one byte every 300ms never idles. What
 # has to end this is wall-clock time from accept, enforced by something other

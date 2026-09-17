@@ -1120,7 +1120,14 @@ WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
 # small requests, so anything that trips one of these is already not us.
 MAX_BODY = 64 * 1024        # the largest real body is a roots edit — a path
 MAX_CONNECTIONS = 32        # in flight, whole server
-MAX_PER_PEER = 8            # in flight, one peer address
+# In flight from one peer address, which on loopback is very nearly the same
+# bucket as the global one: the browser, the bar widget and any terminal on the
+# box all arrive as 127.0.0.1. Measured rather than guessed — a real page load
+# plus two forty-wide parallel bursts peaks at 6, because that is where Chrome
+# caps concurrent connections to one origin. An earlier 8 left two spare for
+# everything that is not the browser, and the failure mode of getting that wrong
+# is a 503 on the operator's own instrument.
+MAX_PER_PEER = 16
 REQUEST_QUEUE = 16          # listen backlog: what the kernel holds for us
 HEADER_DEADLINE = 5.0       # absolute, from accept to the end of the headers
 EXCHANGE_DEADLINE = 25.0    # absolute, from the end of the headers to the close
@@ -1146,6 +1153,11 @@ class BoundedServer(ThreadingHTTPServer):
         self._per_peer: dict = {}
         self._admit_lock = threading.Lock()
         self.refused = 0          # read by the tests, and by nothing else
+        # The high-water mark, so the ceilings can be checked against what this
+        # actually costs rather than against a number somebody liked. A real page
+        # load — the app, its icons, and a 10.8 MB manifest — plus two forty-wide
+        # parallel bursts peaks at 6, and refuses nothing.
+        self.peak = 0
         super().__init__(*args, **kwargs)
 
     def _admit(self, peer: str) -> bool:
@@ -1156,6 +1168,7 @@ class BoundedServer(ThreadingHTTPServer):
                 return False
             self._live += 1
             self._per_peer[peer] = self._per_peer.get(peer, 0) + 1
+            self.peak = max(self.peak, self._live)
             return True
 
     def _release(self, peer: str) -> None:
@@ -1203,8 +1216,12 @@ class BoundedServer(ThreadingHTTPServer):
         about and this is the only place it surfaces.
         """
         exc = sys.exc_info()[1]
+        # Named individually rather than as OSError, which is their shared
+        # parent and also the parent of every FileNotFoundError and
+        # PermissionError this handler can raise while serving a file. Catching
+        # the parent would have made this quiet about faults that are ours.
         if isinstance(exc, (ConnectionResetError, BrokenPipeError,
-                            ConnectionAbortedError, TimeoutError, OSError)):
+                            ConnectionAbortedError, TimeoutError)):
             return
         log(f"request from {client_address[0]} failed: {exc!r}")
 

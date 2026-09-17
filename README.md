@@ -95,8 +95,12 @@ every account on the box can. So there are ceilings, and they are checked rather
 than promised. A request body is capped at 64 KB and a declared
 `Content-Length` over that is refused without a byte being read — the header is
 the caller's opinion, not an allocation order. Connections are counted before a
-worker exists for them: 32 in flight across the server, 8 from any one peer, and
-anything past that gets a 503 and a close. Each connection carries an absolute
+worker exists for them: 32 in flight across the server, 16 from any one peer,
+and anything past that gets a 503 and a close. Those two numbers are measured
+rather than picked: a real page load — the app, its icons and a 10.8 MB manifest
+— plus two forty-wide parallel bursts peaks at **6**, which is where Chrome caps
+concurrent connections to one origin, and on loopback the browser shares its
+bucket with the bar widget and every terminal on the box. Each connection carries an absolute
 wall-clock deadline, five seconds for the headers and twenty-five for the
 exchange after them, enforced by a timer rather than by an idle timeout — one
 byte every four seconds never idles, and used to hold a thread for as long as
