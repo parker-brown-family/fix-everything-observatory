@@ -367,6 +367,34 @@ else
   err "interface tests failed — bin/test-ui"
 fi
 
+# EVERY ACTION A WORKFLOW RUNS IS SOMEBODY ELSE'S CODE HOLDING THIS
+# REPOSITORY'S TOKEN, and a tag is a pointer its owner can move. `@v5` therefore
+# means "whatever that repository is on the day CI happens to run", which is not
+# a thing anybody reviewed. A workflow that declares no `permissions:` takes the
+# default token, which is more than any of these need. Both were true here, and
+# in the two sibling plugins, until a supply-chain review said so
+# (omacom/omarchy-plugin-marketplace#5534, 2026-09-17) — so this is a check
+# rather than a habit now.
+wf_bad=""
+for wf in "$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml; do
+  [[ -e $wf ]] || continue
+  while IFS= read -r u; do
+    [[ $u == ./* ]] && continue          # a local action is this repo's own code
+    ref="${u##*@}"
+    [[ $ref =~ ^[0-9a-f]{40}$ ]] \
+      || wf_bad+="${wf##*/}: uses ${u} — a movable ref, not a commit"$'\n'
+  done < <(grep -oE '^[^#]*uses:[[:space:]]*[^[:space:]]+' "$wf" \
+           | sed -E 's/^.*uses:[[:space:]]*//')
+  grep -qE '^permissions:' "$wf" \
+    || wf_bad+="${wf##*/}: declares no permissions, so it takes the default token"$'\n'
+done
+if [[ -n $wf_bad ]]; then
+  err "a workflow runs unreviewed code, or holds more token than it needs"
+  printf '%s' "$wf_bad" | sed 's/^/    /'
+else
+  ok "every workflow action is pinned to a commit, and every workflow says what it may touch"
+fi
+
 # House rule, machine-absolute: no AI is ever credited in this history.
 if git -C "$root" log --format=%B 2>/dev/null \
    | grep -qiE 'co-authored-by:.*(claude|copilot|codex|gemini|aider)|generated with \[?claude'; then
