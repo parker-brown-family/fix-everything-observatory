@@ -1145,36 +1145,90 @@ WRITE_ROUTES = frozenset({"/api/induct", "/api/forget",
 # a log, an argv, an environment or a backup. The kernel's answer cannot leak,
 # and it needs no change to the browser app, the bar widget or any CLI.
 SERVER_UID = os.getuid()
+BIND_ADDR = "127.0.0.1"
 PROC_NET_TCP = Path("/proc/net/tcp")
+PROC_NET_TCP6 = Path("/proc/net/tcp6")
+# /proc prints a socket's state in field 3. Only an ESTABLISHED row describes a
+# caller that is actually on the other end of this connection right now: a
+# TIME_WAIT bucket for the same port pair is printed with uid 0, which is a
+# stale answer wearing the shape of a real one — and would read as permission
+# on the day somebody runs this as root.
+TCP_ESTABLISHED = "01"
 
 
-def peer_uid(peer_port: int, our_port: int):
-    """The uid owning the loopback socket on `peer_port`, or None if unknown.
+def _proc_addr(dotted: str):
+    """A dotted quad as /proc spells it: the u32 in host byte order, uppercase.
+
+    127.0.0.1 -> "0100007F". Returns None for anything that is not a v4 address,
+    because a caller this cannot spell is a caller this cannot identify.
+    """
+    parts = dotted.split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    return f"{octets[3]:02X}{octets[2]:02X}{octets[1]:02X}{octets[0]:02X}"
+
+
+def peer_uid(peer_addr: str, peer_port: int, our_port: int):
+    """The uid owning the socket on the other end, or None if unknown.
 
     None is not "nobody" and is never treated as permission — see the caller.
     The row wanted is the CLIENT's socket, the one whose local address is the
-    peer's port and whose remote address is ours; our own accepted socket is the
+    peer's and whose remote address is ours; our own accepted socket is the
     mirror of it and would answer with our uid no matter who called.
+
+    THE PEER'S ADDRESS IS PART OF THE QUESTION, AND LEAVING IT OUT WAS A FULL
+    BYPASS. This used to hardcode 127.0.0.1 as the peer's address and match on
+    the two PORTS alone, while `client_address[0]` sat unused one frame up. All
+    of 127.0.0.0/8 routes to lo and any unprivileged user may bind any of it, so
+    a second account could connect from 127.0.0.2 with a source port that some
+    genuine same-uid client happened to hold — a browser keep-alive, a bar-widget
+    poll — and this would find THAT client's row, read our uid off it, and admit
+    the stranger. Measured before the fix: a request from 127.0.0.2 reusing a
+    live client's source port was answered 200 with the rejection counter still
+    at zero, while the same trick on an unused port was correctly refused. The
+    attacker did not even have to guess the port, since refusals are free and
+    the ephemeral range sweeps in seconds.
 
     A sandboxed browser does not break this. /proc/net/tcp is per network
     namespace, so the worry would be a caller whose socket lives in a namespace
     this process cannot see — but a separate network namespace has its own
-    loopback, so such a caller could not have reached 127.0.0.1 here in the first
-    place. Anything that can connect is in this namespace and is in this table.
+    loopback, so such a caller could not have reached this port in the first
+    place. Anything that can connect is in this namespace. tcp6 is read as well
+    because a dual-stack client dialling ::ffff:127.0.0.1 arrives here looking
+    like plain v4 while its row exists only in that table; without it a
+    legitimate same-user client is locked out with a 403 nobody could explain.
     """
-    want_local = f"0100007F:{peer_port:04X}"
-    want_rem = f"0100007F:{our_port:04X}"
-    try:
-        rows = PROC_NET_TCP.read_text().splitlines()[1:]
-    except OSError:
+    local = _proc_addr(peer_addr)
+    ours = _proc_addr(BIND_ADDR)
+    if local is None or ours is None:
         return None
-    for row in rows:
-        f = row.split()
-        if len(f) > 7 and f[1] == want_local and f[2] == want_rem:
-            try:
-                return int(f[7])
-            except ValueError:
-                return None
+    for path, lo, rm in (
+        (PROC_NET_TCP, local, ours),
+        # The v4-mapped form: ::ffff:a.b.c.d, which /proc/net/tcp6 prints as
+        # twelve zero bytes, FFFF, then the v4 address in the same word order.
+        (PROC_NET_TCP6, f"0000000000000000FFFF0000{local}",
+                        f"0000000000000000FFFF0000{ours}"),
+    ):
+        want_local = f"{lo}:{peer_port:04X}"
+        want_rem = f"{rm}:{our_port:04X}"
+        try:
+            rows = path.read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            f = row.split()
+            if (len(f) > 7 and f[1] == want_local and f[2] == want_rem
+                    and f[3] == TCP_ESTABLISHED):
+                try:
+                    return int(f[7])
+                except ValueError:
+                    return None
     return None
 
 
@@ -1251,7 +1305,15 @@ class BoundedServer(ThreadingHTTPServer):
         # static file behind it rather than the ones somebody remembered to list.
         # Unknown fails closed: if the kernel will not say who is on the other
         # end, that is not permission.
-        who = peer_uid(client_address[1], self.server_address[1])
+        #
+        # The peer's ADDRESS is asked about, not assumed. This server is bound to
+        # one address, so a caller arriving from any other one — 127.0.0.2, which
+        # any unprivileged account may bind — is refused outright rather than
+        # looked up; and the lookup itself is given the address so the row it
+        # matches can only be the caller's own. Leaving the address out was a
+        # complete bypass of this gate.
+        who = None if peer != BIND_ADDR else peer_uid(
+            peer, client_address[1], self.server_address[1])
         if who != SERVER_UID:
             with self._admit_lock:
                 self.rejected += 1
@@ -1641,7 +1703,17 @@ class QuietHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return None
-        if not path.startswith("/app/") or ".." in path:
+        # DECODED BEFORE IT IS JUDGED, because that is the order the resolver
+        # uses. translate_path unquotes and only then normalises, and normpath
+        # collapses `..` before the component filter behind it ever runs — so a
+        # guard reading the raw path saw `%2e%2e` as an ordinary string and
+        # waved it through. `/app/../observatory.py` was correctly refused the
+        # whole time, which is exactly why this looked covered. Measured:
+        # /app/%2e%2e/.git/config answered 200 with the config in it, and the
+        # uppercase and mixed forms worked too.
+        from urllib.parse import unquote
+        decoded = unquote(path)
+        if not decoded.startswith("/app/") or ".." in decoded or ".." in path:
             self.send_error(404)
             return None
         return super().send_head()

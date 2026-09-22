@@ -76,6 +76,43 @@ def connect():
     return s
 
 
+def status_of(s):
+    try:
+        buf = b""
+        while b"\r\n" not in buf and len(buf) < 4096:
+            chunk = s.recv(256)
+            if not chunk:
+                break
+            buf += chunk
+    except OSError:
+        buf = b""
+    line = buf.split(b"\r\n")[0].decode("latin-1")
+    return line.split(" ")[1] if line.startswith("HTTP/") else ""
+
+
+def ask_from(src_addr, src_port=0, path=b"/api/caps", verb=b"GET"):
+    """Ask from a chosen loopback address and source port.
+
+    The whole of 127.0.0.0/8 routes to lo and any unprivileged account may bind
+    any of it, which is what makes this reachable from ONE account: the bypass
+    did not need a second user, only a second address.
+    """
+    s = socket.socket()
+    s.settimeout(6)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((src_addr, src_port))
+        s.connect(("127.0.0.1", PORT))
+        s.sendall(verb + b" " + path + b" HTTP/1.1\r\n"
+                  + f"Host: 127.0.0.1:{PORT}\r\n".encode()
+                  + b"X-Fix-Observatory: 1\r\nConnection: close\r\n\r\n")
+        return status_of(s)
+    except OSError as e:
+        return "conn-refused:" + type(e).__name__
+    finally:
+        s.close()
+
+
 def ask(header=b"X-Fix-Observatory: 1\r\n", verb=b"POST", path=b"/api/mine"):
     s = connect()
     try:
@@ -102,7 +139,7 @@ print("\n\033[1mwho the server answers\033[0m")
 # would return None, everything would fail closed, and a suite that only checked
 # "the stranger is refused" would pass while the instrument was dead.
 probe = connect()
-mine = REAL_PEER_UID(probe.getsockname()[1], PORT)
+mine = REAL_PEER_UID("127.0.0.1", probe.getsockname()[1], PORT)
 probe.close()
 check("the lookup reads this user's uid off a live connection",
       mine == os.getuid(), f"got {mine!r}, expected {os.getuid()}")
@@ -110,6 +147,40 @@ check("the lookup reads this user's uid off a live connection",
 check("a request from this user is served", ask() == "200")
 check("and the header is still required, so the CSRF defence is intact",
       ask(header=b"") == "403")
+
+# ---------------------------------------------------------------------------
+# THE BYPASS THIS SUITE USED TO MISS, and the reason it missed it.
+#
+# Everything below the next divider stands in for a second account by replacing
+# peer_uid — which is the function the bug was IN, so those checks exercise the
+# comparison in process_request and never the lookup. The lookup identified a
+# socket by its two PORTS and assumed the peer's address was 127.0.0.1, while
+# the real address sat unused one frame up. Since all of 127.0.0.0/8 routes to
+# lo and needs no privilege to bind, a caller from 127.0.0.2 that reused a
+# source port some genuine same-uid client was holding matched THAT client's
+# row, and was admitted as this user. No second account required — which means
+# no second account is required to test it either.
+# ---------------------------------------------------------------------------
+held = connect()                       # a genuine same-uid client, kept open
+held_port = held.getsockname()[1]
+check("a caller from another loopback address is refused",
+      ask_from("127.0.0.2") == "403")
+check("even when it reuses a source port a real client of ours is holding",
+      ask_from("127.0.0.2", held_port) == "403",
+      "this is the bypass: it was answered 200")
+held.close()
+
+# The served tree is the whole checkout, so the /app/ guard is the only thing
+# between a caller and .git/. It read the path before it was decoded, while the
+# resolver unquotes first and normalises second — so %2e%2e walked straight out.
+check("an encoded traversal out of /app/ is refused",
+      ask_from("127.0.0.1", 0, b"/app/%2e%2e/observatory.py") == "404",
+      "the source of this server was served")
+check("and so is the uppercase form",
+      ask_from("127.0.0.1", 0, b"/app/%2E%2E/.git/config") == "404",
+      "the git config was served")
+check("while the app itself still loads",
+      ask_from("127.0.0.1", 0, b"/app/swarm.html") == "200")
 
 # Everything below stands in for an account this test cannot create.
 before_rejected, before_refused = httpd.rejected, httpd.refused
